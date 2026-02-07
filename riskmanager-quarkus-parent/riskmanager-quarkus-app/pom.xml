@@ -8,8 +8,6 @@
         <version>0.0.1-SNAPSHOT</version>
     </parent>
     <artifactId>riskmanager-quarkus-app</artifactId>
-    <packaging>jar</packaging>
-    <version>0.0.1-SNAPSHOT</version>
     <name>Risk Manager Quarkus App</name>
 
     <properties>
@@ -47,9 +45,14 @@
             <scope>test</scope>
         </dependency>
         <dependency>
-            <groupId>com.github.riskmanager</groupId>
-            <artifactId>riskmanager-quarkus-ib-client</artifactId>
-            <version>${project.version}</version>
+            <groupId>jakarta.json.bind</groupId>
+            <artifactId>jakarta.json.bind-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.cxf</groupId>
+            <artifactId>cxf-rt-rs-extension-providers</artifactId>
+            <version>4.1.4</version>
+            <scope>compile</scope>
         </dependency>
     </dependencies>
 
@@ -115,6 +118,35 @@
                         <maven.home>${maven.home}</maven.home>
                     </systemPropertyVariables>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.openapitools</groupId>
+                <artifactId>openapi-generator-maven-plugin</artifactId>
+                <version>7.2.0</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${project.basedir}/src/main/resources/api-contract.json</inputSpec>
+                            <generatorName>java</generatorName>
+                            <library>microprofile</library>
+                            <skipValidateSpec>true</skipValidateSpec>
+                            <output>${project.build.directory}/generated-sources/openapi</output>
+                            <apiPackage>com.github.riskmanager.ib.api</apiPackage>
+                            <modelPackage>com.github.riskmanager.ib.model</modelPackage>
+                            <configOptions>
+                                <sourceFolder>src/main/java</sourceFolder>
+                                <useJakartaEe>true</useJakartaEe>
+                                <microprofileRestClientVersion>3.0</microprofileRestClientVersion>
+                            </configOptions>
+                            <apisToGenerate>Account,Order,Portfolio,Session</apisToGenerate>  <!-- Only generate the APIs you need -->
+                            <generateModelTests>false</generateModelTests>
+                            <generateApiTests>false</generateApiTests>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

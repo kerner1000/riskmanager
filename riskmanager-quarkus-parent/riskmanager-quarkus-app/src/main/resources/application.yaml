@@ -1,13 +1,30 @@
 quarkus:
   rest-client:
-    ib-client:
-      url: https://localhost:5500
+    "com.github.riskmanager.ib.api.PortfolioApi":
+      url: https://localhost:5500/v1/api
       scope: jakarta.inject.Singleton
+      follow-redirects: false
+    "com.github.riskmanager.ib.api.OrderApi":
+      url: https://localhost:5500/v1/api
+      scope: jakarta.inject.Singleton
+      follow-redirects: false
+    "com.github.riskmanager.ib.api.AccountApi":
+      url: https://localhost:5500/v1/api
+      scope: jakarta.inject.Singleton
+      follow-redirects: false
+    "com.github.riskmanager.ib.api.SessionApi":
+      url: https://localhost:5500/v1/api
+      scope: jakarta.inject.Singleton
+      follow-redirects: false
   tls:
     trust-all: true
 
+currency:
+  exchange-rate-api-url: https://api.exchangerate.host/latest
+
 risk:
   unprotected-loss-percentage: 50
+  base-currency: EUR
   accounts:
     - U12345
     - U12345

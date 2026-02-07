@@ -15,7 +15,6 @@
 
     <modules>
         <module>riskmanager-quarkus-app</module>
-        <module>riskmanager-quarkus-ib-client</module>
     </modules>
 
     <dependencyManagement>
