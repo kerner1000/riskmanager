@@ -17,6 +17,10 @@ import java.util.stream.Collectors;
 @ApplicationScoped
 public class RiskCalculationService {
 
+    public static final String ORDER_TYPE_STOP_LOSS = "STP";
+    public static final String ORDER_SIDE_SELL = "SELL";
+    public static final String ORDER_SIDE_BUY = "BUY";
+    public static final String TIME_IN_FORCE_GTC = "GTC";
     @Inject
     IBDataService dataService;
 
@@ -148,26 +152,7 @@ public class RiskCalculationService {
     }
 
     private BigDecimal extractStopPrice(IserverAccountOrdersGet200ResponseOrdersInner order) {
-        if (order.getPrice() != null) {
-            return order.getPrice();
-        }
-
-        String orderDesc = order.getOrderDesc();
-        if (orderDesc != null && orderDesc.toLowerCase().contains("stop")) {
-            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
-                    "(?i)stop\\s+([\\d,]+\\.?\\d*)"
-            );
-            java.util.regex.Matcher matcher = pattern.matcher(orderDesc);
-            if (matcher.find()) {
-                try {
-                    String priceStr = matcher.group(1).replace(",", "");
-                    return new BigDecimal(priceStr);
-                } catch (NumberFormatException e) {
-                    Log.warnf("Could not parse stop price from orderDesc: %s", orderDesc);
-                }
-            }
-        }
-        return null;
+        return new StopPriceExtractor().extract(order);
     }
 
     private BigDecimal calculateAssumedStopPrice(PositionInner position) {
@@ -241,36 +226,30 @@ public class RiskCalculationService {
     }
 
     private StopLossResult createStopLossOrder(String accountId, PositionInner position, BigDecimal lossPercentage) {
-        if (position.getPosition().compareTo(BigDecimal.ZERO) == 0) {
-            return new StopLossResult(accountId, position.getContractDesc(), position.getConid(),
-                    null, BigDecimal.ZERO, false, "Position size is zero");
+        if (isZeroPosition(position)) {
+            return zeroPositionResult(accountId, position);
         }
 
-        try {
-            List<IserverAccountOrdersGet200ResponseOrdersInner> existingStops =
-                    dataService.fetchStopOrdersForConid(accountId, position.getConid());
-            if (!existingStops.isEmpty()) {
-                IserverAccountOrdersGet200ResponseOrdersInner existing = existingStops.getFirst();
-                return new StopLossResult(accountId, position.getContractDesc(), position.getConid(),
-                        existing.getPrice(),
-                        existing.getRemainingQuantity() != null ? existing.getRemainingQuantity() : BigDecimal.ZERO,
-                        false, "Stop loss already exists at price " + existing.getPrice());
-            }
-        } catch (Exception e) {
-            Log.warnf("Could not check for existing stop orders: %s", e.getMessage());
+        Optional<StopLossResult> existing = checkExistingStopLoss(accountId, position);
+        if (existing.isPresent()) {
+            return existing.get();
         }
 
+        return placeNewStopLoss(accountId, position, lossPercentage);
+    }
+
+    private StopLossResult placeNewStopLoss(String accountId, PositionInner position, BigDecimal lossPercentage) {
         try {
             BigDecimal stopPrice = calculateStopPrice(position, lossPercentage);
             boolean isLong = position.getPosition().compareTo(BigDecimal.ZERO) > 0;
 
             OrderRequest orderRequest = new OrderRequest();
             orderRequest.setConid(position.getConid());
-            orderRequest.setOrderType("STP");
+            orderRequest.setOrderType(ORDER_TYPE_STOP_LOSS);
             orderRequest.setPrice(stopPrice);
             orderRequest.setQuantity(position.getPosition().abs());
-            orderRequest.setSide(isLong ? "SELL" : "BUY");
-            orderRequest.setTif("GTC");
+            orderRequest.setSide(isLong ? ORDER_SIDE_SELL : ORDER_SIDE_BUY);
+            orderRequest.setTif(TIME_IN_FORCE_GTC);
 
             IserverAccountAccountIdOrdersPostRequest request = new IserverAccountAccountIdOrdersPostRequest();
             request.setOrders(List.of(orderRequest));
@@ -284,14 +263,68 @@ public class RiskCalculationService {
                 }
             }
 
-            return new StopLossResult(accountId, position.getContractDesc(), position.getConid(),
-                    stopPrice, position.getPosition().abs(), true, "Stop loss created successfully");
+            return new StopLossResult(
+                    accountId,
+                    position.getContractDesc(),
+                    position.getConid(),
+                    stopPrice,
+                    position.getPosition().abs(),
+                    true,
+                    "Stop loss created successfully"
+            );
 
         } catch (Exception e) {
-            return new StopLossResult(accountId, position.getContractDesc(), position.getConid(),
-                    null, position.getPosition().abs(), false, "Failed: " + e.getMessage());
+            return new StopLossResult(
+                    accountId,
+                    position.getContractDesc(),
+                    position.getConid(),
+                    null,
+                    position.getPosition().abs(),
+                    false,
+                    "Failed: " + e.getMessage()
+            );
         }
     }
+
+    private boolean isZeroPosition(PositionInner position) {
+        return position.getPosition().compareTo(BigDecimal.ZERO) == 0;
+    }
+
+    private StopLossResult zeroPositionResult(String accountId, PositionInner position) {
+        return new StopLossResult(
+                accountId,
+                position.getContractDesc(),
+                position.getConid(),
+                null,
+                BigDecimal.ZERO,
+                false,
+                "Position size is zero"
+        );
+    }
+
+    private Optional<StopLossResult> checkExistingStopLoss(String accountId, PositionInner position) {
+        try {
+            List<IserverAccountOrdersGet200ResponseOrdersInner> existingStops =
+                    dataService.fetchStopOrdersForConid(accountId, position.getConid());
+
+            if (!existingStops.isEmpty()) {
+                IserverAccountOrdersGet200ResponseOrdersInner existing = existingStops.getFirst();
+                return Optional.of(new StopLossResult(
+                        accountId,
+                        position.getContractDesc(),
+                        position.getConid(),
+                        existing.getPrice(),
+                        existing.getRemainingQuantity() != null ? existing.getRemainingQuantity() : BigDecimal.ZERO,
+                        false,
+                        "Stop loss already exists at price " + existing.getPrice()
+                ));
+            }
+        } catch (Exception e) {
+            Log.warnf("Could not check for existing stop orders: %s", e.getMessage());
+        }
+        return Optional.empty();
+    }
+
 
     public String createStopLossForPositionDebug(String accountId, String ticker, BigDecimal lossPercentage) throws Exception {
         List<PositionInner> positions = dataService.fetchPositionsForAccount(accountId);
@@ -306,11 +339,11 @@ public class RiskCalculationService {
 
         OrderRequest orderRequest = new OrderRequest();
         orderRequest.setConid(position.getConid());
-        orderRequest.setOrderType("STP");
+        orderRequest.setOrderType(ORDER_TYPE_STOP_LOSS);
         orderRequest.setPrice(stopPrice);
         orderRequest.setQuantity(position.getPosition().abs());
-        orderRequest.setSide(isLong ? "SELL" : "BUY");
-        orderRequest.setTif("GTC");
+        orderRequest.setSide(isLong ? ORDER_SIDE_SELL : ORDER_SIDE_BUY);
+        orderRequest.setTif(TIME_IN_FORCE_GTC);
 
         IserverAccountAccountIdOrdersPostRequest request = new IserverAccountAccountIdOrdersPostRequest();
         request.setOrders(List.of(orderRequest));
