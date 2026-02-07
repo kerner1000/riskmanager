@@ -36,15 +36,15 @@ hs_err_pid*
 Thumbs.db
 
 # DotEnv
-.env
-.env.*
-!.env.example
-!.env.dev.example
-!.env.staging.example
-!.env.prod.example
-!.env.local.example
-!.env.template
-!.env.dev.template
-!.env.staging.template
-!.env.prod.template
-!.env.local.template
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.dev.example
+!**/.env.staging.example
+!**/.env.prod.example
+!**/.env.local.example
+!**/.env.template
+!**/.env.dev.template
+!**/.env.staging.template
+!**/.env.prod.template
+!**/.env.local.template
