@@ -29,6 +29,4 @@ currency:
 risk:
   unprotected-loss-percentage: 50
   base-currency: EUR
-  accounts:
-    - U12345
-    - U12345
+  accounts: ${RISK_ACCOUNTS}
