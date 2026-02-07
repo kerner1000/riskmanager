@@ -1,0 +1,13 @@
+quarkus:
+  rest-client:
+    ib-client:
+      url: https://localhost:5500
+      scope: jakarta.inject.Singleton
+  tls:
+    trust-all: true
+
+risk:
+  unprotected-loss-percentage: 50
+  accounts:
+    - U12345
+    - U12345
