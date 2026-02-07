@@ -18,6 +18,10 @@ quarkus:
       follow-redirects: false
   tls:
     trust-all: true
+  log:
+    category:
+      "io.smallrye.config":
+        level: DEBUG
 
 currency:
   exchange-rate-api-url: https://api.exchangerate.host/latest
