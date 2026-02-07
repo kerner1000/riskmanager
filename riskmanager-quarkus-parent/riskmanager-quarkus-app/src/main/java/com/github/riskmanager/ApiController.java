@@ -16,7 +16,6 @@ import org.eclipse.microprofile.rest.client.inject.RestClient;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 
 
 @Path("/api")
@@ -83,16 +82,16 @@ public class ApiController {
     @GET
     @Path("/risk")
     @Produces(MediaType.APPLICATION_JSON)
-    public RiskCalculationService.RiskReport getWorstCaseRisk(
+    public RiskReport getWorstCaseRisk(
             @QueryParam("unprotectedOnly") @DefaultValue("false") boolean unprotectedOnly
     ) throws Exception {
-        RiskCalculationService.RiskReport report = riskService.calculateWorstCaseScenarioForAccounts(accounts);
+        RiskReport report = riskService.calculateWorstCaseScenarioForAccounts(accounts);
 
         if (unprotectedOnly) {
-            List<RiskCalculationService.PositionRisk> filtered = report.positionRisks().stream()
+            List<PositionRisk> filtered = report.positionRisks().stream()
                     .filter(r -> !r.hasStopLoss())
                     .toList();
-            return new RiskCalculationService.RiskReport(
+            return new RiskReport(
                     report.unprotectedLoss(),
                     BigDecimal.ZERO,
                     report.unprotectedLoss(),
@@ -107,10 +106,10 @@ public class ApiController {
     @POST
     @Path("/risk/protect")
     @Produces(MediaType.APPLICATION_JSON)
-    public List<RiskCalculationService.StopLossResult> createMissingStopLosses(
+    public List<StopLossResult> createMissingStopLosses(
             @QueryParam("lossPercentage") @DefaultValue("10") BigDecimal lossPercentage
     ) throws Exception {
-        List<RiskCalculationService.StopLossResult> allResults = new ArrayList<>();
+        List<StopLossResult> allResults = new ArrayList<>();
         for (String accountId : accounts) {
             allResults.addAll(riskService.createMissingStopLosses(accountId, lossPercentage));
         }
@@ -120,11 +119,11 @@ public class ApiController {
     @POST
     @Path("/risk/protect/{conid}")
     @Produces(MediaType.APPLICATION_JSON)
-    public List<RiskCalculationService.StopLossResult> createStopLossForConid(
+    public List<StopLossResult> createStopLossForConid(
             @PathParam("conid") Integer conid,
             @QueryParam("lossPercentage") @DefaultValue("10") BigDecimal lossPercentage
     ) throws Exception {
-        List<RiskCalculationService.StopLossResult> results = new ArrayList<>();
+        List<StopLossResult> results = new ArrayList<>();
         for (String accountId : accounts) {
             List<PositionInner> positions = portfolioApi.portfolioAccountIdPositionsPageIdGet(
                     accountId, "0", null, null, null, null);
@@ -133,7 +132,7 @@ public class ApiController {
             }
         }
         if (results.isEmpty()) {
-            results.add(new RiskCalculationService.StopLossResult(null, null, conid, null, null, false,
+            results.add(new StopLossResult(null, null, conid, null, null, false,
                     "Position not found for conid: " + conid + " in any configured account"));
         }
         return results;
@@ -142,11 +141,11 @@ public class ApiController {
     @POST
     @Path("/risk/protect/ticker/{ticker}")
     @Produces(MediaType.APPLICATION_JSON)
-    public List<RiskCalculationService.StopLossResult> createStopLossForTicker(
+    public List<StopLossResult> createStopLossForTicker(
             @PathParam("ticker") String ticker,
             @QueryParam("lossPercentage") @DefaultValue("10") BigDecimal lossPercentage
     ) throws Exception {
-        List<RiskCalculationService.StopLossResult> results = new ArrayList<>();
+        List<StopLossResult> results = new ArrayList<>();
         for (String accountId : accounts) {
             List<PositionInner> positions = portfolioApi.portfolioAccountIdPositionsPageIdGet(
                     accountId, "0", null, null, null, null);
@@ -155,7 +154,7 @@ public class ApiController {
             }
         }
         if (results.isEmpty()) {
-            results.add(new RiskCalculationService.StopLossResult(null, ticker, null, null, null, false,
+            results.add(new StopLossResult(null, ticker, null, null, null, false,
                     "Position not found for ticker: " + ticker + " in any configured account"));
         }
         return results;
