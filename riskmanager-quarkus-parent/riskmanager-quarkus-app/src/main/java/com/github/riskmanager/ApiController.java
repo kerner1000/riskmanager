@@ -27,22 +27,22 @@ public class ApiController {
     private final AccountApi accountApi;
     private final RiskCalculationService riskService;
     private final IBGatewayHealthService gatewayHealthService;
-
-    @ConfigProperty(name = "risk.accounts")
-    List<String> accounts;
+    private final List<String> accounts;
 
     public ApiController(
             @RestClient PortfolioApi portfolioApi,
             @RestClient OrderApi orderApi,
             @RestClient AccountApi accountApi,
             RiskCalculationService riskService,
-            IBGatewayHealthService gatewayHealthService
+            IBGatewayHealthService gatewayHealthService,
+            @ConfigProperty(name = "risk.accounts")List<String> accounts
     ) {
         this.portfolioApi = portfolioApi;
         this.orderApi = orderApi;
         this.accountApi = accountApi;
         this.riskService = riskService;
         this.gatewayHealthService = gatewayHealthService;
+        this.accounts = accounts;
     }
 
     @GET

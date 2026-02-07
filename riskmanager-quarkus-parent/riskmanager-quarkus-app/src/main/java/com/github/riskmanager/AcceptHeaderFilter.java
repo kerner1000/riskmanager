@@ -2,6 +2,7 @@ package com.github.riskmanager;
 
 
 
+import io.quarkus.logging.Log;
 import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.ws.rs.Priorities;
@@ -23,7 +24,7 @@ public class AcceptHeaderFilter implements ClientRequestFilter {
 
     @Override
     public void filter(ClientRequestContext requestContext) throws IOException {
-        System.out.println("Adding Accept header to request");
+        Log.debug("Adding Accept header to request");
         requestContext.getHeaders().putSingle("Accept", "*/*");
 
         // Add session cookies if configured
