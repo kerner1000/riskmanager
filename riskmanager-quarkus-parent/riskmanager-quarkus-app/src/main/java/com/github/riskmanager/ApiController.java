@@ -10,6 +10,7 @@ import com.github.riskmanager.ib.model.PositionInner;
 import com.github.riskmanager.ib.model.SetAccount;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 
@@ -101,6 +102,54 @@ public class ApiController {
             );
         }
         return report;
+    }
+
+    @GET
+    @Path("/risk/csv")
+    @Produces("text/csv")
+    public Response getWorstCaseRiskCsv(
+            @QueryParam("unprotectedOnly") @DefaultValue("false") boolean unprotectedOnly
+    ) throws Exception {
+        RiskReport report = getWorstCaseRisk(unprotectedOnly);
+
+        StringBuilder csv = new StringBuilder();
+        // Header row
+        csv.append("Account ID,Ticker,Position Size,Avg Price,Current Price,Stop Price,")
+                .append("Order Quantity,Potential Loss,Position Value,Currency,")
+                .append("Potential Loss (Base),Position Value (Base),Base Currency,Has Stop Loss\n");
+
+        // Data rows
+        for (PositionRisk risk : report.positionRisks()) {
+            csv.append(escapeCsv(risk.accountId())).append(",")
+                    .append(escapeCsv(risk.ticker())).append(",")
+                    .append(risk.positionSize()).append(",")
+                    .append(risk.avgPrice()).append(",")
+                    .append(risk.currentPrice()).append(",")
+                    .append(risk.stopPrice()).append(",")
+                    .append(risk.orderQuantity()).append(",")
+                    .append(risk.potentialLoss()).append(",")
+                    .append(risk.positionValue()).append(",")
+                    .append(escapeCsv(risk.currency())).append(",")
+                    .append(risk.potentialLossBase()).append(",")
+                    .append(risk.positionValueBase()).append(",")
+                    .append(escapeCsv(risk.baseCurrency())).append(",")
+                    .append(risk.hasStopLoss()).append("\n");
+        }
+
+        return Response.ok(csv.toString())
+                .type("text/csv; charset=UTF-8")
+                .header("Content-Disposition", "attachment; filename=risk-report.csv")
+                .build();
+    }
+
+    private String escapeCsv(String value) {
+        if (value == null) {
+            return "";
+        }
+        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        return value;
     }
 
     @POST
