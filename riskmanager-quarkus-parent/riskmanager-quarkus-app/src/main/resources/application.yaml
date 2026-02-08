@@ -1,4 +1,6 @@
 quarkus:
+  http:
+    port: 8090
   rest-client:
     "com.github.riskmanager.ib.api.PortfolioApi":
       url: https://localhost:5500/v1/api
@@ -22,6 +24,9 @@ quarkus:
     category:
       "io.smallrye.config":
         level: DEBUG
+  # To switch to TWS API, uncomment:
+  arc:
+    selected-alternatives: com.github.riskmanager.broker.IBTwsGateway
 
 currency:
   exchange-rate-api-url: https://api.exchangerate.host/latest
@@ -30,3 +35,9 @@ risk:
   unprotected-loss-percentage: 50
   base-currency: EUR
   accounts: ${RISK_ACCOUNTS}
+
+tws:
+  host: ${TWS_HOST:127.0.0.1}
+  port: ${TWS_PORT:4001}  # 4001 for IB Gateway live, 4002 for paper, 7496/7497 for TWS
+  client-id: ${TWS_CLIENT_ID:1}
+

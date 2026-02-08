@@ -54,6 +54,17 @@
             <version>4.1.4</version>
             <scope>compile</scope>
         </dependency>
+        <!-- TWS API - Interactive Brokers -->
+        <dependency>
+            <groupId>com.ib</groupId>
+            <artifactId>tws-api</artifactId>
+            <version>1027.02</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>4.29.3</version>
+        </dependency>
     </dependencies>
 
     <build>

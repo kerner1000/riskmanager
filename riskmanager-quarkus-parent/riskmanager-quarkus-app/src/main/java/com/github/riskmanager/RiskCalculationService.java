@@ -2,7 +2,9 @@
 package com.github.riskmanager;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.riskmanager.ib.model.*;
+import com.github.riskmanager.broker.BrokerException;
+import com.github.riskmanager.broker.BrokerGateway;
+import com.github.riskmanager.broker.BrokerGateway.*;
 import io.quarkus.logging.Log;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -21,8 +23,9 @@ public class RiskCalculationService {
     public static final String ORDER_SIDE_SELL = "SELL";
     public static final String ORDER_SIDE_BUY = "BUY";
     public static final String TIME_IN_FORCE_GTC = "GTC";
+
     @Inject
-    IBDataService dataService;
+    BrokerGateway brokerGateway;
 
     @Inject
     CurrencyConversionService currencyService;
@@ -38,11 +41,14 @@ public class RiskCalculationService {
 
     // ==================== Risk Calculation ====================
 
-    public RiskReport calculateWorstCaseScenarioForAccounts(List<String> accountIds) throws Exception {
-        List<PositionInner> allPositions = dataService.fetchAllPositions(accountIds);
-        List<IserverAccountOrdersGet200ResponseOrdersInner> stopOrders = dataService.fetchAllStopOrders();
+    public RiskReport calculateWorstCaseScenarioForAccounts(List<String> accountIds) throws BrokerException {
+        List<Position> allPositions = new ArrayList<>();
+        for (String accountId : accountIds) {
+            allPositions.addAll(brokerGateway.getPositions(accountId));
+        }
+        List<Order> stopOrders = brokerGateway.getAllStopOrders();
 
-        Map<PositionKey, PositionInner> positionsByKey = buildPositionMap(allPositions);
+        Map<PositionKey, Position> positionsByKey = buildPositionMap(allPositions);
 
         RiskAccumulator accumulator = new RiskAccumulator(currencyService);
         Set<PositionKey> protectedPositions = processProtectedPositions(stopOrders, positionsByKey, accumulator);
@@ -51,73 +57,73 @@ public class RiskCalculationService {
         return accumulator.toReport(unprotectedLossPercentage);
     }
 
-    private Map<PositionKey, PositionInner> buildPositionMap(List<PositionInner> positions) {
+    private Map<PositionKey, Position> buildPositionMap(List<Position> positions) {
         return positions.stream()
                 .collect(Collectors.toMap(
-                        p -> new PositionKey(p.getConid(), p.getAcctId()),
+                        p -> new PositionKey(p.conid(), p.accountId()),
                         Function.identity(),
                         (a, b) -> a
                 ));
     }
 
     private Set<PositionKey> processProtectedPositions(
-            List<IserverAccountOrdersGet200ResponseOrdersInner> stopOrders,
-            Map<PositionKey, PositionInner> positionsByKey,
+            List<Order> stopOrders,
+            Map<PositionKey, Position> positionsByKey,
             RiskAccumulator accumulator
     ) {
         Set<PositionKey> protectedPositions = new HashSet<>();
 
-        for (IserverAccountOrdersGet200ResponseOrdersInner order : stopOrders) {
-            Integer conid = order.getConid() != null ? order.getConid().intValue() : null;
+        for (Order order : stopOrders) {
+            Integer conid = order.conid();
             if (conid == null) continue;
 
-            PositionKey key = new PositionKey(conid, order.getAcct());
-            PositionInner position = positionsByKey.get(key);
+            PositionKey key = new PositionKey(conid, order.accountId());
+            Position position = positionsByKey.get(key);
 
-            BigDecimal stopPrice = extractStopPrice(order);
+            BigDecimal stopPrice = order.stopPrice();
             if (stopPrice == null || position == null) continue;
 
             protectedPositions.add(key);
 
-            BigDecimal quantity = order.getRemainingQuantity() != null
-                    ? order.getRemainingQuantity()
-                    : (order.getFilledQuantity() != null ? order.getFilledQuantity() : BigDecimal.ZERO);
+            BigDecimal quantity = order.remainingQuantity() != null
+                    ? order.remainingQuantity()
+                    : (order.quantity() != null ? order.quantity() : BigDecimal.ZERO);
 
-            String ticker = order.getTicker() != null ? order.getTicker() : position.getContractDesc();
+            String ticker = order.ticker() != null ? order.ticker() : position.ticker();
             addPositionRisk(accumulator, position, stopPrice, quantity.abs(), ticker, true);
         }
         return protectedPositions;
     }
 
     private void processUnprotectedPositions(
-            List<PositionInner> allPositions,
+            List<Position> allPositions,
             Set<PositionKey> protectedPositions,
             RiskAccumulator accumulator
     ) {
-        for (PositionInner position : allPositions) {
-            PositionKey key = new PositionKey(position.getConid(), position.getAcctId());
-            if (protectedPositions.contains(key) || position.getPosition().compareTo(BigDecimal.ZERO) == 0) {
+        for (Position position : allPositions) {
+            PositionKey key = new PositionKey(position.conid(), position.accountId());
+            if (protectedPositions.contains(key) || position.isZero()) {
                 continue;
             }
 
-            BigDecimal quantity = position.getPosition().abs();
+            BigDecimal quantity = position.quantity().abs();
             BigDecimal assumedStopPrice = calculateAssumedStopPrice(position);
-            addPositionRisk(accumulator, position, assumedStopPrice, quantity, position.getContractDesc(), false);
+            addPositionRisk(accumulator, position, assumedStopPrice, quantity, position.ticker(), false);
         }
     }
 
     private void addPositionRisk(
             RiskAccumulator accumulator,
-            PositionInner position,
+            Position position,
             BigDecimal stopPrice,
             BigDecimal quantity,
             String ticker,
             boolean hasStopLoss
     ) {
-        BigDecimal potentialLoss = calculateLossPerShare(position.getPosition(), position.getAvgPrice(), stopPrice)
+        BigDecimal potentialLoss = calculateLossPerShare(position.quantity(), position.avgPrice(), stopPrice)
                 .multiply(quantity);
-        BigDecimal positionValue = position.getPosition().abs().multiply(position.getMktPrice());
-        String currency = position.getCurrency();
+        BigDecimal positionValue = position.quantity().abs().multiply(position.marketPrice());
+        String currency = position.currency();
 
         if (hasStopLoss) {
             accumulator.addProtectedLoss(potentialLoss, currency);
@@ -126,11 +132,11 @@ public class RiskCalculationService {
         }
 
         accumulator.addRisk(new PositionRisk(
-                position.getAcctId(),
+                position.accountId(),
                 ticker,
-                position.getPosition(),
-                position.getAvgPrice(),
-                position.getMktPrice(),
+                position.quantity(),
+                position.avgPrice(),
+                position.marketPrice(),
                 stopPrice,
                 quantity,
                 potentialLoss,
@@ -151,40 +157,36 @@ public class RiskCalculationService {
         }
     }
 
-    private BigDecimal extractStopPrice(IserverAccountOrdersGet200ResponseOrdersInner order) {
-        return new StopPriceExtractor().extract(order);
-    }
-
-    private BigDecimal calculateAssumedStopPrice(PositionInner position) {
+    private BigDecimal calculateAssumedStopPrice(Position position) {
         BigDecimal lossMultiplier = BigDecimal.ONE.subtract(
                 unprotectedLossPercentage.divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP)
         );
 
-        if (position.getPosition().compareTo(BigDecimal.ZERO) > 0) {
-            return position.getAvgPrice().multiply(lossMultiplier);
+        if (position.isLong()) {
+            return position.avgPrice().multiply(lossMultiplier);
         } else {
             BigDecimal gainMultiplier = BigDecimal.ONE.add(
                     unprotectedLossPercentage.divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP)
             );
-            return position.getAvgPrice().multiply(gainMultiplier);
+            return position.avgPrice().multiply(gainMultiplier);
         }
     }
 
     // ==================== Stop Loss Creation ====================
 
-    public List<StopLossResult> createMissingStopLosses(String accountId, BigDecimal lossPercentage) throws Exception {
-        List<PositionInner> positions = dataService.fetchPositionsForAccount(accountId);
-        List<IserverAccountOrdersGet200ResponseOrdersInner> stopOrders = dataService.fetchStopOrdersForAccountWithRefresh(accountId);
+    public List<StopLossResult> createMissingStopLosses(String accountId, BigDecimal lossPercentage) throws BrokerException {
+        List<Position> positions = brokerGateway.getPositions(accountId);
+        List<Order> stopOrders = brokerGateway.getStopOrders(accountId);
 
         Set<Integer> protectedConids = stopOrders.stream()
-                .map(o -> o.getConid() != null ? o.getConid().intValue() : null)
+                .map(Order::conid)
                 .filter(Objects::nonNull)
                 .collect(Collectors.toSet());
 
         List<StopLossResult> results = new ArrayList<>();
 
-        for (PositionInner position : positions) {
-            if (protectedConids.contains(position.getConid()) || position.getPosition().compareTo(BigDecimal.ZERO) == 0) {
+        for (Position position : positions) {
+            if (protectedConids.contains(position.conid()) || position.isZero()) {
                 continue;
             }
             results.add(createStopLossOrder(accountId, position, lossPercentage));
@@ -193,11 +195,11 @@ public class RiskCalculationService {
         return results;
     }
 
-    public StopLossResult createStopLossForPosition(String accountId, Integer conid, BigDecimal lossPercentage) throws Exception {
-        List<PositionInner> positions = dataService.fetchPositionsForAccount(accountId);
+    public StopLossResult createStopLossForPosition(String accountId, Integer conid, BigDecimal lossPercentage) throws BrokerException {
+        List<Position> positions = brokerGateway.getPositions(accountId);
 
-        PositionInner position = positions.stream()
-                .filter(p -> conid.equals(p.getConid()))
+        Position position = positions.stream()
+                .filter(p -> conid.equals(p.conid()))
                 .findFirst()
                 .orElse(null);
 
@@ -209,11 +211,11 @@ public class RiskCalculationService {
         return createStopLossOrder(accountId, position, lossPercentage);
     }
 
-    public StopLossResult createStopLossForPositionByTicker(String accountId, String ticker, BigDecimal lossPercentage) throws Exception {
-        List<PositionInner> positions = dataService.fetchPositionsForAccount(accountId);
+    public StopLossResult createStopLossForPositionByTicker(String accountId, String ticker, BigDecimal lossPercentage) throws BrokerException {
+        List<Position> positions = brokerGateway.getPositions(accountId);
 
-        PositionInner position = positions.stream()
-                .filter(p -> ticker.equalsIgnoreCase(p.getContractDesc()))
+        Position position = positions.stream()
+                .filter(p -> ticker.equalsIgnoreCase(p.ticker()))
                 .findFirst()
                 .orElse(null);
 
@@ -225,8 +227,8 @@ public class RiskCalculationService {
         return createStopLossOrder(accountId, position, lossPercentage);
     }
 
-    private StopLossResult createStopLossOrder(String accountId, PositionInner position, BigDecimal lossPercentage) {
-        if (isZeroPosition(position)) {
+    private StopLossResult createStopLossOrder(String accountId, Position position, BigDecimal lossPercentage) {
+        if (position.isZero()) {
             return zeroPositionResult(accountId, position);
         }
 
@@ -238,63 +240,48 @@ public class RiskCalculationService {
         return placeNewStopLoss(accountId, position, lossPercentage);
     }
 
-    private StopLossResult placeNewStopLoss(String accountId, PositionInner position, BigDecimal lossPercentage) {
+    private StopLossResult placeNewStopLoss(String accountId, Position position, BigDecimal lossPercentage) {
         try {
             BigDecimal stopPrice = calculateStopPrice(position, lossPercentage);
-            boolean isLong = position.getPosition().compareTo(BigDecimal.ZERO) > 0;
 
-            OrderRequest orderRequest = new OrderRequest();
-            orderRequest.setConid(position.getConid());
-            orderRequest.setOrderType(ORDER_TYPE_STOP_LOSS);
-            orderRequest.setPrice(stopPrice);
-            orderRequest.setQuantity(position.getPosition().abs());
-            orderRequest.setSide(isLong ? ORDER_SIDE_SELL : ORDER_SIDE_BUY);
-            orderRequest.setTif(TIME_IN_FORCE_GTC);
+            StopLossOrderRequest request = new StopLossOrderRequest(
+                    accountId,
+                    position.conid(),
+                    stopPrice,
+                    position.quantity().abs(),
+                    position.isLong()
+            );
 
-            IserverAccountAccountIdOrdersPostRequest request = new IserverAccountAccountIdOrdersPostRequest();
-            request.setOrders(List.of(orderRequest));
-
-            List<IserverAccountAccountIdOrderPost200ResponseInner> responses = dataService.placeOrder(accountId, request);
-
-            if (responses != null && !responses.isEmpty()) {
-                IserverAccountAccountIdOrderPost200ResponseInner first = responses.getFirst();
-                if (first.getId() != null && first.getMessage() != null && !first.getMessage().isEmpty()) {
-                    dataService.confirmOrder(first.getId());
-                }
-            }
+            OrderResult result = brokerGateway.placeStopLossOrder(request);
 
             return new StopLossResult(
                     accountId,
-                    position.getContractDesc(),
-                    position.getConid(),
+                    position.ticker(),
+                    position.conid(),
                     stopPrice,
-                    position.getPosition().abs(),
-                    true,
-                    "Stop loss created successfully"
+                    position.quantity().abs(),
+                    result.success(),
+                    result.message()
             );
 
         } catch (Exception e) {
             return new StopLossResult(
                     accountId,
-                    position.getContractDesc(),
-                    position.getConid(),
+                    position.ticker(),
+                    position.conid(),
                     null,
-                    position.getPosition().abs(),
+                    position.quantity().abs(),
                     false,
                     "Failed: " + e.getMessage()
             );
         }
     }
 
-    private boolean isZeroPosition(PositionInner position) {
-        return position.getPosition().compareTo(BigDecimal.ZERO) == 0;
-    }
-
-    private StopLossResult zeroPositionResult(String accountId, PositionInner position) {
+    private StopLossResult zeroPositionResult(String accountId, Position position) {
         return new StopLossResult(
                 accountId,
-                position.getContractDesc(),
-                position.getConid(),
+                position.ticker(),
+                position.conid(),
                 null,
                 BigDecimal.ZERO,
                 false,
@@ -302,21 +289,20 @@ public class RiskCalculationService {
         );
     }
 
-    private Optional<StopLossResult> checkExistingStopLoss(String accountId, PositionInner position) {
+    private Optional<StopLossResult> checkExistingStopLoss(String accountId, Position position) {
         try {
-            List<IserverAccountOrdersGet200ResponseOrdersInner> existingStops =
-                    dataService.fetchStopOrdersForConid(accountId, position.getConid());
+            List<Order> existingStops = brokerGateway.getStopOrdersForConid(accountId, position.conid());
 
             if (!existingStops.isEmpty()) {
-                IserverAccountOrdersGet200ResponseOrdersInner existing = existingStops.getFirst();
+                Order existing = existingStops.getFirst();
                 return Optional.of(new StopLossResult(
                         accountId,
-                        position.getContractDesc(),
-                        position.getConid(),
-                        existing.getPrice(),
-                        existing.getRemainingQuantity() != null ? existing.getRemainingQuantity() : BigDecimal.ZERO,
+                        position.ticker(),
+                        position.conid(),
+                        existing.price(),
+                        existing.remainingQuantity() != null ? existing.remainingQuantity() : BigDecimal.ZERO,
                         false,
-                        "Stop loss already exists at price " + existing.getPrice()
+                        "Stop loss already exists at price " + existing.price()
                 ));
             }
         } catch (Exception e) {
@@ -325,59 +311,44 @@ public class RiskCalculationService {
         return Optional.empty();
     }
 
-
     public String createStopLossForPositionDebug(String accountId, String ticker, BigDecimal lossPercentage) throws Exception {
-        List<PositionInner> positions = dataService.fetchPositionsForAccount(accountId);
+        List<Position> positions = brokerGateway.getPositions(accountId);
 
-        PositionInner position = positions.stream()
-                .filter(p -> ticker.equalsIgnoreCase(p.getContractDesc()))
+        Position position = positions.stream()
+                .filter(p -> ticker.equalsIgnoreCase(p.ticker()))
                 .findFirst()
                 .orElseThrow(() -> new RuntimeException("Position not found: " + ticker));
 
         BigDecimal stopPrice = calculateStopPrice(position, lossPercentage);
-        boolean isLong = position.getPosition().compareTo(BigDecimal.ZERO) > 0;
 
-        OrderRequest orderRequest = new OrderRequest();
-        orderRequest.setConid(position.getConid());
-        orderRequest.setOrderType(ORDER_TYPE_STOP_LOSS);
-        orderRequest.setPrice(stopPrice);
-        orderRequest.setQuantity(position.getPosition().abs());
-        orderRequest.setSide(isLong ? ORDER_SIDE_SELL : ORDER_SIDE_BUY);
-        orderRequest.setTif(TIME_IN_FORCE_GTC);
-
-        IserverAccountAccountIdOrdersPostRequest request = new IserverAccountAccountIdOrdersPostRequest();
-        request.setOrders(List.of(orderRequest));
+        StopLossOrderRequest request = new StopLossOrderRequest(
+                accountId,
+                position.conid(),
+                stopPrice,
+                position.quantity().abs(),
+                position.isLong()
+        );
 
         StringBuilder debug = new StringBuilder();
         debug.append("=== Request ===\n");
         debug.append(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(request));
-        debug.append("\n\n=== Response 1 (Place Order) ===\n");
+        debug.append("\n\n=== Response ===\n");
 
-        List<IserverAccountAccountIdOrderPost200ResponseInner> responses = dataService.placeOrder(accountId, request);
-        debug.append(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(responses));
-
-        if (responses != null && !responses.isEmpty()) {
-            IserverAccountAccountIdOrderPost200ResponseInner first = responses.getFirst();
-            if (first.getId() != null && first.getMessage() != null && !first.getMessage().isEmpty()) {
-                debug.append("\n\n=== Response 2 (Confirm) ===\n");
-                var confirmResponse = dataService.confirmOrder(first.getId());
-                debug.append(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(confirmResponse));
-            }
-        }
+        OrderResult result = brokerGateway.placeStopLossOrder(request);
+        debug.append(objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(result));
 
         return debug.toString();
     }
 
-    private BigDecimal calculateStopPrice(PositionInner position, BigDecimal lossPercentage) {
+    private BigDecimal calculateStopPrice(Position position, BigDecimal lossPercentage) {
         BigDecimal multiplier = lossPercentage.divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
 
-        if (position.getPosition().compareTo(BigDecimal.ZERO) > 0) {
-            return position.getMktPrice().multiply(BigDecimal.ONE.subtract(multiplier))
+        if (position.isLong()) {
+            return position.marketPrice().multiply(BigDecimal.ONE.subtract(multiplier))
                     .setScale(2, RoundingMode.DOWN);
         } else {
-            return position.getMktPrice().multiply(BigDecimal.ONE.add(multiplier))
+            return position.marketPrice().multiply(BigDecimal.ONE.add(multiplier))
                     .setScale(2, RoundingMode.UP);
         }
     }
-
 }

@@ -1,83 +1,49 @@
 package com.github.riskmanager;
 
-import com.github.riskmanager.ib.api.AccountApi;
-import com.github.riskmanager.ib.api.ApiException;
-import com.github.riskmanager.ib.api.OrderApi;
-import com.github.riskmanager.ib.api.PortfolioApi;
-import com.github.riskmanager.ib.model.IserverAccountOrdersGet200Response;
-import com.github.riskmanager.ib.model.IserverAccountOrdersGet200ResponseOrdersInner;
-import com.github.riskmanager.ib.model.PositionInner;
-import com.github.riskmanager.ib.model.SetAccount;
+import com.github.riskmanager.broker.BrokerException;
+import com.github.riskmanager.broker.BrokerGateway;
+import com.github.riskmanager.broker.BrokerGateway.*;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.eclipse.microprofile.rest.client.inject.RestClient;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 
-
 @Path("/api")
 public class ApiController {
 
-    private final PortfolioApi portfolioApi;
-    private final OrderApi orderApi;
-    private final AccountApi accountApi;
+    private final BrokerGateway brokerGateway;
     private final RiskCalculationService riskService;
-    private final IBGatewayHealthService gatewayHealthService;
-    private final List<String> accounts;
 
     public ApiController(
-            @RestClient PortfolioApi portfolioApi,
-            @RestClient OrderApi orderApi,
-            @RestClient AccountApi accountApi,
-            RiskCalculationService riskService,
-            IBGatewayHealthService gatewayHealthService,
-            @ConfigProperty(name = "risk.accounts")List<String> accounts
+            BrokerGateway brokerGateway,
+            RiskCalculationService riskService
     ) {
-        this.portfolioApi = portfolioApi;
-        this.orderApi = orderApi;
-        this.accountApi = accountApi;
+        this.brokerGateway = brokerGateway;
         this.riskService = riskService;
-        this.gatewayHealthService = gatewayHealthService;
-        this.accounts = accounts;
     }
 
     @GET
     @Path("/gateway/status")
     @Produces(MediaType.APPLICATION_JSON)
-    public IBGatewayHealthService.GatewayStatus getGatewayStatus() {
-        return gatewayHealthService.checkGatewayStatus();
+    public ConnectionStatus getGatewayStatus() {
+        return brokerGateway.getConnectionStatus();
     }
 
     @POST
     @Path("/gateway/keepalive")
     @Produces(MediaType.APPLICATION_JSON)
     public boolean keepAlive() {
-        return gatewayHealthService.keepAlive();
+        return brokerGateway.keepAlive();
     }
-
 
     @GET
     @Path("/positions")
     @Produces(MediaType.APPLICATION_JSON)
-    public List<PositionInner> getAllPositions() {
-        List<PositionInner> allPositions = new ArrayList<>();
-        for (String accountId : accounts) {
-            List<PositionInner> positions = null;
-            try {
-                positions = portfolioApi.portfolioAccountIdPositionsPageIdGet(
-                        accountId, "0", null, null, null, null);
-            } catch (ApiException e) {
-                throw new RuntimeException(e);
-            }
-            if (positions != null) {
-                allPositions.addAll(positions);
-            }
-        }
-        return allPositions;
+    public List<Position> getAllPositions() throws BrokerException {
+        return brokerGateway.getAllPositions();
     }
 
     @GET
@@ -86,6 +52,7 @@ public class ApiController {
     public RiskReport getWorstCaseRisk(
             @QueryParam("unprotectedOnly") @DefaultValue("false") boolean unprotectedOnly
     ) throws Exception {
+        List<String> accounts = brokerGateway.getConfiguredAccounts();
         RiskReport report = riskService.calculateWorstCaseScenarioForAccounts(accounts);
 
         if (unprotectedOnly) {
@@ -159,7 +126,7 @@ public class ApiController {
             @QueryParam("lossPercentage") @DefaultValue("10") BigDecimal lossPercentage
     ) throws Exception {
         List<StopLossResult> allResults = new ArrayList<>();
-        for (String accountId : accounts) {
+        for (String accountId : brokerGateway.getConfiguredAccounts()) {
             allResults.addAll(riskService.createMissingStopLosses(accountId, lossPercentage));
         }
         return allResults;
@@ -173,10 +140,9 @@ public class ApiController {
             @QueryParam("lossPercentage") @DefaultValue("10") BigDecimal lossPercentage
     ) throws Exception {
         List<StopLossResult> results = new ArrayList<>();
-        for (String accountId : accounts) {
-            List<PositionInner> positions = portfolioApi.portfolioAccountIdPositionsPageIdGet(
-                    accountId, "0", null, null, null, null);
-            if (positions != null && positions.stream().anyMatch(p -> conid.equals(p.getConid()))) {
+        for (String accountId : brokerGateway.getConfiguredAccounts()) {
+            List<Position> positions = brokerGateway.getPositions(accountId);
+            if (positions.stream().anyMatch(p -> conid.equals(p.conid()))) {
                 results.add(riskService.createStopLossForPosition(accountId, conid, lossPercentage));
             }
         }
@@ -195,10 +161,9 @@ public class ApiController {
             @QueryParam("lossPercentage") @DefaultValue("10") BigDecimal lossPercentage
     ) throws Exception {
         List<StopLossResult> results = new ArrayList<>();
-        for (String accountId : accounts) {
-            List<PositionInner> positions = portfolioApi.portfolioAccountIdPositionsPageIdGet(
-                    accountId, "0", null, null, null, null);
-            if (positions != null && positions.stream().anyMatch(p -> ticker.equalsIgnoreCase(p.getContractDesc()))) {
+        for (String accountId : brokerGateway.getConfiguredAccounts()) {
+            List<Position> positions = brokerGateway.getPositions(accountId);
+            if (positions.stream().anyMatch(p -> ticker.equalsIgnoreCase(p.ticker()))) {
                 results.add(riskService.createStopLossForPositionByTicker(accountId, ticker, lossPercentage));
             }
         }
@@ -217,10 +182,9 @@ public class ApiController {
             @QueryParam("lossPercentage") @DefaultValue("10") BigDecimal lossPercentage
     ) throws Exception {
         List<String> results = new ArrayList<>();
-        for (String accountId : accounts) {
-            List<PositionInner> positions = portfolioApi.portfolioAccountIdPositionsPageIdGet(
-                    accountId, "0", null, null, null, null);
-            if (positions != null && positions.stream().anyMatch(p -> ticker.equalsIgnoreCase(p.getContractDesc()))) {
+        for (String accountId : brokerGateway.getConfiguredAccounts()) {
+            List<Position> positions = brokerGateway.getPositions(accountId);
+            if (positions.stream().anyMatch(p -> ticker.equalsIgnoreCase(p.ticker()))) {
                 results.add("[Account: " + accountId + "]\n" +
                         riskService.createStopLossForPositionDebug(accountId, ticker, lossPercentage));
             }
@@ -234,42 +198,7 @@ public class ApiController {
     @GET
     @Path("/orders/all")
     @Produces(MediaType.APPLICATION_JSON)
-    public IserverAccountOrdersGet200Response getAllOrders() throws InterruptedException {
-        List<IserverAccountOrdersGet200ResponseOrdersInner> allOrders = new ArrayList<>();
-
-        for (String accountId : accounts) {
-            // Switch account
-            SetAccount setAccount = new SetAccount();
-            setAccount.setAcctId(accountId);
-            try {
-                accountApi.iserverAccountPost(setAccount);
-            } catch (ApiException e) {
-                throw new RuntimeException(e);
-            }
-            Thread.sleep(200);
-
-            // Force refresh
-            try {
-                orderApi.iserverAccountOrdersGet(null);
-            } catch (ApiException e) {
-                throw new RuntimeException(e);
-            }
-            Thread.sleep(200);
-
-            // Get orders
-            IserverAccountOrdersGet200Response response = null;
-            try {
-                response = orderApi.iserverAccountOrdersGet(null);
-            } catch (ApiException e) {
-                throw new RuntimeException(e);
-            }
-            if (response != null && response.getOrders() != null) {
-                allOrders.addAll(response.getOrders());
-            }
-        }
-
-        IserverAccountOrdersGet200Response result = new IserverAccountOrdersGet200Response();
-        result.setOrders(allOrders);
-        return result;
+    public List<Order> getAllOrders() throws BrokerException {
+        return brokerGateway.getAllOrders();
     }
 }
