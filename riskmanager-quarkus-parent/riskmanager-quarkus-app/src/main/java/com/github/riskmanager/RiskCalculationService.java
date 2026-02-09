@@ -24,6 +24,9 @@ public class RiskCalculationService {
     public static final String ORDER_SIDE_BUY = "BUY";
     public static final String TIME_IN_FORCE_GTC = "GTC";
 
+    private static final int CURRENCY_SCALE = 4;
+    private static final int SIZE_SCALE = 4;
+
     @Inject
     BrokerGateway brokerGateway;
 
@@ -42,10 +45,11 @@ public class RiskCalculationService {
     // ==================== Risk Calculation ====================
 
     public RiskReport calculateWorstCaseScenarioForAccounts(List<String> accountIds) throws BrokerException {
-        List<Position> allPositions = new ArrayList<>();
-        for (String accountId : accountIds) {
-            allPositions.addAll(brokerGateway.getPositions(accountId));
-        }
+        // Fetch all positions once (not per account) to avoid duplicate market data requests
+        List<Position> allPositions = brokerGateway.getAllPositions().stream()
+                .filter(p -> accountIds.contains(p.accountId()))
+                .toList();
+
         List<Order> stopOrders = brokerGateway.getAllStopOrders();
 
         Map<PositionKey, Position> positionsByKey = buildPositionMap(allPositions);
@@ -73,24 +77,44 @@ public class RiskCalculationService {
     ) {
         Set<PositionKey> protectedPositions = new HashSet<>();
 
-        for (Order order : stopOrders) {
-            Integer conid = order.conid();
-            if (conid == null) continue;
+        // Group stop orders by position key
+        Map<PositionKey, List<Order>> ordersByPosition = stopOrders.stream()
+                .filter(o -> o.conid() != null)
+                .collect(Collectors.groupingBy(o -> new PositionKey(o.conid(), o.accountId())));
 
-            PositionKey key = new PositionKey(conid, order.accountId());
+        for (Map.Entry<PositionKey, List<Order>> entry : ordersByPosition.entrySet()) {
+            PositionKey key = entry.getKey();
+            List<Order> orders = entry.getValue();
             Position position = positionsByKey.get(key);
 
-            BigDecimal stopPrice = order.stopPrice();
-            if (stopPrice == null || position == null) continue;
+            if (position == null) continue;
+
+            // Sum up quantities from all stop orders
+            BigDecimal totalStopQuantity = BigDecimal.ZERO;
+            BigDecimal weightedStopPriceSum = BigDecimal.ZERO;
+
+            for (Order order : orders) {
+                BigDecimal stopPrice = order.stopPrice();
+                if (stopPrice == null) continue;
+
+                BigDecimal quantity = order.remainingQuantity() != null
+                        ? order.remainingQuantity()
+                        : (order.quantity() != null ? order.quantity() : BigDecimal.ZERO);
+                quantity = quantity.abs();
+
+                totalStopQuantity = totalStopQuantity.add(quantity);
+                weightedStopPriceSum = weightedStopPriceSum.add(stopPrice.multiply(quantity));
+            }
+
+            if (totalStopQuantity.compareTo(BigDecimal.ZERO) == 0) continue;
 
             protectedPositions.add(key);
 
-            BigDecimal quantity = order.remainingQuantity() != null
-                    ? order.remainingQuantity()
-                    : (order.quantity() != null ? order.quantity() : BigDecimal.ZERO);
+            // Calculate weighted average stop price
+            BigDecimal avgStopPrice = weightedStopPriceSum.divide(totalStopQuantity, CURRENCY_SCALE, RoundingMode.HALF_UP);
+            String ticker = orders.getFirst().ticker() != null ? orders.getFirst().ticker() : position.ticker();
 
-            String ticker = order.ticker() != null ? order.ticker() : position.ticker();
-            addPositionRisk(accumulator, position, stopPrice, quantity.abs(), ticker, true);
+            addPositionRisk(accumulator, position, avgStopPrice, totalStopQuantity, ticker, true);
         }
         return protectedPositions;
     }
@@ -120,40 +144,48 @@ public class RiskCalculationService {
             String ticker,
             boolean hasStopLoss
     ) {
-        BigDecimal potentialLoss = calculateLossPerShare(position.quantity(), position.avgPrice(), stopPrice)
-                .multiply(quantity);
-        BigDecimal positionValue = position.quantity().abs().multiply(position.marketPrice());
+        // Calculate profit per share (positive = profit locked in, negative = potential loss)
+        BigDecimal profitPerShare = calculateProfitPerShare(position.quantity(), position.avgPrice(), stopPrice);
+        BigDecimal profit = profitPerShare.multiply(quantity).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP);
+        BigDecimal positionValue = position.quantity().abs().multiply(position.marketPrice()).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP);
         String currency = position.currency();
 
         if (hasStopLoss) {
-            accumulator.addProtectedLoss(potentialLoss, currency);
+            accumulator.addProtectedProfit(profit, currency);
         } else {
-            accumulator.addUnprotectedLoss(potentialLoss, currency);
+            accumulator.addUnprotectedProfit(profit, currency);
         }
 
         accumulator.addRisk(new PositionRisk(
                 position.accountId(),
                 ticker,
-                position.quantity(),
-                position.avgPrice(),
-                position.marketPrice(),
-                stopPrice,
-                quantity,
-                potentialLoss,
+                position.quantity().setScale(SIZE_SCALE, RoundingMode.HALF_UP),
+                position.avgPrice().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
+                position.marketPrice().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
+                stopPrice.setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
+                quantity.setScale(SIZE_SCALE, RoundingMode.HALF_UP),
+                profit,
                 positionValue,
                 currency,
-                currencyService.convertToBase(potentialLoss, currency),
-                currencyService.convertToBase(positionValue, currency),
+                currencyService.convertToBase(profit, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
+                currencyService.convertToBase(positionValue, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
                 currencyService.getBaseCurrency(),
-                hasStopLoss
+                hasStopLoss,
+                null  // portfolioPercentage calculated in RiskAccumulator.toReport()
         ));
     }
 
-    private BigDecimal calculateLossPerShare(BigDecimal positionSize, BigDecimal avgPrice, BigDecimal stopPrice) {
+    /**
+     * Calculate profit per share based on stop price vs average price.
+     * Positive = profit locked in, Negative = potential loss exposure.
+     */
+    private BigDecimal calculateProfitPerShare(BigDecimal positionSize, BigDecimal avgPrice, BigDecimal stopPrice) {
         if (positionSize.compareTo(BigDecimal.ZERO) > 0) {
-            return avgPrice.subtract(stopPrice);
-        } else {
+            // Long position: profit = stopPrice - avgPrice
             return stopPrice.subtract(avgPrice);
+        } else {
+            // Short position: profit = avgPrice - stopPrice
+            return avgPrice.subtract(stopPrice);
         }
     }
 

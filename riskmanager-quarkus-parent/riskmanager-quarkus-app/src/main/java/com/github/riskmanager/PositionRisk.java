@@ -10,12 +10,13 @@ public record PositionRisk(
         BigDecimal currentPrice,
         BigDecimal stopPrice,
         BigDecimal orderQuantity,
-        BigDecimal potentialLoss,
+        BigDecimal profit,
         BigDecimal positionValue,
         String currency,
-        BigDecimal potentialLossBase,
+        BigDecimal profitBase,
         BigDecimal positionValueBase,
         String baseCurrency,
-        boolean hasStopLoss
+        boolean hasStopLoss,
+        BigDecimal portfolioPercentage
 ) {
 }

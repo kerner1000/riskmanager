@@ -70,11 +70,9 @@ public class IBTwsGateway implements BrokerGateway {
         client.eConnect(twsHost, twsPort, clientId);
 
         if (client.isConnected()) {
-            // Start the reader thread
             EReader reader = new EReader(client, signal);
             reader.start();
 
-            // Start message processing thread
             Thread messageThread = new Thread(() -> {
                 while (client.isConnected()) {
                     signal.waitForSignal();
@@ -121,7 +119,7 @@ public class IBTwsGateway implements BrokerGateway {
         boolean connected = client != null && client.isConnected();
         return new ConnectionStatus(
                 connected,
-                connected, // TWS connection implies authentication
+                connected,
                 connected,
                 false,
                 connected ? "Connected to TWS" : "Not connected to TWS"
@@ -159,10 +157,12 @@ public class IBTwsGateway implements BrokerGateway {
 
         try {
             List<Position> allPositions = future.get(30, TimeUnit.SECONDS);
-            // Filter out zero/closed positions
-            return allPositions.stream()
+            List<Position> nonZeroPositions = allPositions.stream()
                     .filter(p -> !p.isZero())
                     .toList();
+
+            // Fetch market prices for all positions
+            return enrichWithMarketPrices(nonZeroPositions);
         } catch (TimeoutException e) {
             throw new BrokerException("Timeout waiting for positions", e);
         } catch (Exception e) {
@@ -172,27 +172,68 @@ public class IBTwsGateway implements BrokerGateway {
 
     @Override
     public List<Position> getPositions(String accountId) throws BrokerException {
-        ensureConnected();
+        return getAllPositions().stream()
+                .filter(p -> accountId.equals(p.accountId()))
+                .toList();
+    }
 
-        CompletableFuture<List<Position>> future = new CompletableFuture<>();
-        List<Position> positions = Collections.synchronizedList(new ArrayList<>());
-
-        callbackHandler.registerPositionCallback(accountId, positions, future);
-
-        client.reqPositions();
-
-        try {
-            List<Position> allPositions = future.get(30, TimeUnit.SECONDS);
-            // Filter by account and exclude zero positions
-            return allPositions.stream()
-                    .filter(p -> accountId.equals(p.accountId()))
-                    .filter(p -> !p.isZero())
-                    .toList();
-        } catch (TimeoutException e) {
-            throw new BrokerException("Timeout waiting for positions", e);
-        } catch (Exception e) {
-            throw new BrokerException("Failed to fetch positions: " + e.getMessage(), e);
+    /**
+     * Enriches positions with current market prices using delayed market data.
+     */
+    private List<Position> enrichWithMarketPrices(List<Position> positions) {
+        if (positions.isEmpty()) {
+            return positions;
         }
+
+        // Request delayed market data (free, no subscription required)
+        Log.info(">>> Requesting delayed market data (type 3)...");
+        client.reqMarketDataType(3);
+
+        Map<Integer, CompletableFuture<BigDecimal>> priceFutures = new ConcurrentHashMap<>();
+        Map<Integer, Integer> conidToReqId = new ConcurrentHashMap<>();
+
+        for (Position pos : positions) {
+            int reqId = nextRequestId();
+            conidToReqId.put(pos.conid(), reqId);
+
+            CompletableFuture<BigDecimal> priceFuture = new CompletableFuture<>();
+            priceFutures.put(pos.conid(), priceFuture);
+            callbackHandler.registerPriceCallback(reqId, pos.conid(), priceFuture);
+
+            Contract contract = new Contract();
+            contract.conid(pos.conid());
+            contract.exchange("SMART");
+
+            Log.infof(">>> reqMktData: reqId=%d, conid=%d, ticker=%s", reqId, pos.conid(), pos.ticker());
+            client.reqMktData(reqId, contract, "", true, false, null);
+        }
+
+        List<Position> enrichedPositions = new ArrayList<>();
+        for (Position pos : positions) {
+            BigDecimal marketPrice = BigDecimal.ZERO;
+            try {
+                marketPrice = priceFutures.get(pos.conid()).get(5, TimeUnit.SECONDS);
+                Log.infof(">>> Got price for %s: %s", pos.ticker(), marketPrice);
+            } catch (TimeoutException e) {
+                Log.warnf(">>> Timeout getting price for %s (conid=%d)", pos.ticker(), pos.conid());
+            } catch (Exception e) {
+                Log.warnf(">>> Error getting price for %s: %s", pos.ticker(), e.getMessage());
+            }
+
+            // No need to cancel - snapshot mode (5th param = true) auto-cancels after data received
+
+            enrichedPositions.add(new Position(
+                    pos.accountId(),
+                    pos.conid(),
+                    pos.ticker(),
+                    pos.quantity(),
+                    pos.avgPrice(),
+                    marketPrice,
+                    pos.currency()
+            ));
+        }
+
+        return enrichedPositions;
     }
 
     @Override
@@ -260,11 +301,9 @@ public class IBTwsGateway implements BrokerGateway {
 
         int orderId = nextRequestId();
 
-        // Create contract
         Contract contract = new Contract();
         contract.conid(request.conid());
 
-        // Create order
         com.ib.client.Order order = new com.ib.client.Order();
         order.orderId(orderId);
         order.action(request.isLong() ? "SELL" : "BUY");
@@ -293,9 +332,6 @@ public class IBTwsGateway implements BrokerGateway {
 
 
 // ... existing code ...
-
-    // ==================== TWS Callback Handler ====================
-
     /**
      * Extends DefaultEWrapper to get default implementations for all callbacks,
      * then override only the ones we need.
@@ -314,6 +350,10 @@ public class IBTwsGateway implements BrokerGateway {
         // Order status tracking
         private final Map<Integer, CompletableFuture<OrderResult>> orderStatusFutures = new ConcurrentHashMap<>();
 
+        // Market data tracking: reqId -> (conid, future)
+        private final Map<Integer, Integer> reqIdToConid = new ConcurrentHashMap<>();
+        private final Map<Integer, CompletableFuture<BigDecimal>> priceFutures = new ConcurrentHashMap<>();
+
         void registerPositionCallback(String accountFilter, List<Position> list, CompletableFuture<List<Position>> future) {
             this.positionAccountFilter = accountFilter;
             this.positionList = list;
@@ -329,12 +369,16 @@ public class IBTwsGateway implements BrokerGateway {
             orderStatusFutures.put(orderId, future);
         }
 
+        void registerPriceCallback(int reqId, int conid, CompletableFuture<BigDecimal> future) {
+            reqIdToConid.put(reqId, conid);
+            priceFutures.put(conid, future);
+        }
+
         // ==================== Position Callbacks ====================
 
         @Override
         public void position(String account, Contract contract, Decimal pos, double avgCost) {
-            Log.infof(">>> position callback: account=%s, symbol=%s, conid=%d, pos=%s, avgCost=%f, currency=%s",
-                    account, contract.symbol(), contract.conid(), pos, avgCost, contract.currency());
+            Log.debugf(">>> position: %s %s qty=%s avgCost=%f", account, contract.symbol(), pos, avgCost);
 
             if (positionList != null) {
                 BigDecimal qty = (pos != null && pos.isValid()) ? pos.value() : BigDecimal.ZERO;
@@ -354,7 +398,7 @@ public class IBTwsGateway implements BrokerGateway {
 
         @Override
         public void positionEnd() {
-            Log.info(">>> positionEnd callback received");
+            Log.debug(">>> positionEnd");
             if (positionFuture != null && positionList != null) {
                 positionFuture.complete(new ArrayList<>(positionList));
                 positionList = null;
@@ -362,13 +406,73 @@ public class IBTwsGateway implements BrokerGateway {
             }
         }
 
+        // ==================== Market Data Callbacks ====================
+
+        // In TwsCallbackHandler, update tickPrice to log ALL incoming ticks:
+
+        @Override
+        public void tickPrice(int tickerId, int field, double price, TickAttrib attrib) {
+            Log.debugf(">>> tickPrice: tickerId=%d, field=%d, price=%f, attrib=%s",
+                    tickerId, field, price, attrib);
+
+            if (price > 0) {
+                Integer conid = reqIdToConid.get(tickerId);
+                if (conid != null) {
+                    CompletableFuture<BigDecimal> future = priceFutures.get(conid);
+                    if (future != null && !future.isDone()) {
+                        // Accept last, close, or delayed equivalents
+                        // Real-time: 4=last, 9=close
+                        // Delayed: 68=delayed last, 75=delayed close, 72=delayed high, 73=delayed low, 66=delayed bid, 67=delayed ask
+                        // Prioritize close/last, but accept high/low/bid/ask as fallback
+                        if (field == 4 || field == 9 || field == 68 || field == 75 ||
+                                field == 72 || field == 73 || field == 66 || field == 67) {
+                            Log.infof(">>> Completing price future: conid=%d, price=%f (field=%d)", conid, price, field);
+                            future.complete(BigDecimal.valueOf(price));
+                        }
+                    }
+                }
+            }
+        }
+
+        @Override
+        public void tickSnapshotEnd(int reqId) {
+            Log.debugf(">>> tickSnapshotEnd: reqId=%d", reqId);
+            Integer conid = reqIdToConid.get(reqId);
+            if (conid != null) {
+                CompletableFuture<BigDecimal> future = priceFutures.get(conid);
+                if (future != null && !future.isDone()) {
+                    Log.warnf(">>> No usable price received for conid=%d, completing with ZERO", conid);
+                    future.complete(BigDecimal.ZERO);
+                }
+            }
+        }
+
+        @Override
+        public void marketDataType(int reqId, int marketDataType) {
+            // 1 = real-time, 2 = frozen, 3 = delayed, 4 = delayed-frozen
+            Log.debugf(">>> marketDataType: reqId=%d, type=%d (%s)", reqId, marketDataType,
+                    switch (marketDataType) {
+                        case 1 -> "REAL-TIME";
+                        case 2 -> "FROZEN";
+                        case 3 -> "DELAYED";
+                        case 4 -> "DELAYED-FROZEN";
+                        default -> "UNKNOWN";
+                    });
+        }
+
         // ==================== Order Callbacks ====================
 
         @Override
         public void openOrder(int orderId, Contract contract, com.ib.client.Order order, OrderState orderState) {
-            Log.infof(">>> openOrder callback: orderId=%d, symbol=%s, type=%s, status=%s",
-                    orderId, contract.symbol(), order.orderType(), orderState.status());
+            Log.debugf(">>> openOrder: %d %s %s qty=%s filled=%s",
+                    orderId, contract.symbol(), order.orderType(),
+                    order.totalQuantity(), order.filledQuantity());
             if (orderList != null) {
+                // Safely get quantities - check for null/invalid Decimal
+                BigDecimal totalQty = safeDecimalValue(order.totalQuantity());
+                BigDecimal filledQty = safeDecimalValue(order.filledQuantity());
+                BigDecimal remainingQty = totalQty.subtract(filledQty);
+
                 Order brokerOrder = new Order(
                         String.valueOf(orderId),
                         order.account(),
@@ -378,17 +482,32 @@ public class IBTwsGateway implements BrokerGateway {
                         order.action().getApiString(),
                         BigDecimal.valueOf(order.lmtPrice()),
                         BigDecimal.valueOf(order.auxPrice()),
-                        decimalToBigDecimal(order.totalQuantity()),
-                        decimalToBigDecimal(order.totalQuantity()).subtract(decimalToBigDecimal(order.filledQuantity())),
+                        totalQty,
+                        remainingQty,
                         orderState.status().name()
                 );
                 orderList.add(brokerOrder);
             }
         }
 
+        /**
+         * Safely converts IB Decimal to BigDecimal, handling null and invalid values.
+         */
+        private BigDecimal safeDecimalValue(Decimal decimal) {
+            if (decimal == null || !decimal.isValid()) {
+                return BigDecimal.ZERO;
+            }
+            try {
+                return decimal.value();
+            } catch (Exception e) {
+                Log.warnf("Invalid Decimal value: %s", decimal);
+                return BigDecimal.ZERO;
+            }
+        }
+
         @Override
         public void openOrderEnd() {
-            Log.info(">>> openOrderEnd callback received");
+            Log.debug(">>> openOrderEnd");
             if (orderFuture != null && orderList != null) {
                 orderFuture.complete(new ArrayList<>(orderList));
                 orderList = null;
@@ -397,21 +516,10 @@ public class IBTwsGateway implements BrokerGateway {
         }
 
         @Override
-        public void orderStatus(
-                int orderId,
-                String status,
-                Decimal filled,
-                Decimal remaining,
-                double avgFillPrice,
-                long permId,
-                int parentId,
-                double lastFillPrice,
-                int clientId,
-                String whyHeld,
-                double mktCapPrice
-        ) {
-            Log.infof(">>> orderStatus callback: orderId=%d, status=%s, filled=%s, remaining=%s",
-                    orderId, status, filled, remaining);
+        public void orderStatus(int orderId, String status, Decimal filled, Decimal remaining,
+                                double avgFillPrice, long permId, int parentId, double lastFillPrice,
+                                int clientId, String whyHeld, double mktCapPrice) {
+            Log.debugf(">>> orderStatus: %d %s", orderId, status);
 
             CompletableFuture<OrderResult> future = orderStatusFutures.remove(orderId);
             if (future != null) {
@@ -424,7 +532,7 @@ public class IBTwsGateway implements BrokerGateway {
 
         @Override
         public void connectAck() {
-            Log.info(">>> connectAck callback received");
+            Log.info(">>> connectAck");
             if (client.isAsyncEConnect()) {
                 client.startAPI();
             }
@@ -432,7 +540,7 @@ public class IBTwsGateway implements BrokerGateway {
 
         @Override
         public void connectionClosed() {
-            Log.warn(">>> connectionClosed callback received");
+            Log.warn(">>> connectionClosed");
             if (positionFuture != null) {
                 positionFuture.completeExceptionally(new BrokerException("Connection closed"));
                 positionFuture = null;
@@ -446,14 +554,23 @@ public class IBTwsGateway implements BrokerGateway {
         }
 
         @Override
-        public void error(
-                int reqId,
-                long errorTime,
-                int errorCode,
-                String errorMsg,
-                String advancedOrderRejectJson
-        ) {
-            Log.warnf(">>> error callback: reqId=%d, code=%d, msg=%s", reqId, errorCode, errorMsg);
+        public void error(int reqId, long errorTime, int errorCode, String errorMsg, String advancedOrderRejectJson) {
+            // 10167 = delayed data warning, 300 = can't find tickerId (already cancelled)
+            if (errorCode == 10167 || errorCode == 300) {
+                Log.debugf(">>> Ignoring benign error: reqId=%d, code=%d, msg=%s", reqId, errorCode, errorMsg);
+                return;
+            }
+
+            Log.warnf(">>> error: reqId=%d, code=%d, msg=%s", reqId, errorCode, errorMsg);
+
+            // Market data errors - complete with zero price
+            Integer conid = reqIdToConid.remove(reqId);
+            if (conid != null) {
+                CompletableFuture<BigDecimal> priceFuture = priceFutures.get(conid);
+                if (priceFuture != null && !priceFuture.isDone()) {
+                    priceFuture.complete(BigDecimal.ZERO);
+                }
+            }
 
             if (errorCode == 504 || errorCode == 502) {
                 if (positionFuture != null) {
@@ -476,27 +593,13 @@ public class IBTwsGateway implements BrokerGateway {
 
         @Override
         public void nextValidId(int orderId) {
-            Log.infof(">>> nextValidId callback: %d", orderId);
+            Log.infof(">>> nextValidId: %d", orderId);
             requestIdCounter.set(orderId);
         }
 
         @Override
         public void managedAccounts(String accountsList) {
-            Log.infof(">>> managedAccounts callback: %s", accountsList);
+            Log.infof(">>> managedAccounts: %s", accountsList);
         }
-    }
-
-    // ==================== Helper Methods ====================
-
-    /**
-     * Converts IB's Decimal type to BigDecimal properly.
-     * Decimal.longValue() truncates decimals, so we use the string representation.
-     */
-    private BigDecimal decimalToBigDecimal(Decimal decimal) {
-        if (decimal == null || !decimal.isValid()) {
-            return BigDecimal.ZERO;
-        }
-        // Use string conversion to preserve precision
-        return new BigDecimal(decimal.toString());
     }
 }

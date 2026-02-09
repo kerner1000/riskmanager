@@ -60,9 +60,9 @@ public class ApiController {
                     .filter(r -> !r.hasStopLoss())
                     .toList();
             return new RiskReport(
-                    report.unprotectedLoss(),
+                    report.unprotectedProfit(),
                     BigDecimal.ZERO,
-                    report.unprotectedLoss(),
+                    report.unprotectedProfit(),
                     report.currency(),
                     report.unprotectedLossPercentageUsed(),
                     filtered
@@ -82,8 +82,8 @@ public class ApiController {
         StringBuilder csv = new StringBuilder();
         // Header row
         csv.append("Account ID,Ticker,Position Size,Avg Price,Current Price,Stop Price,")
-                .append("Order Quantity,Potential Loss,Position Value,Currency,")
-                .append("Potential Loss (Base),Position Value (Base),Base Currency,Has Stop Loss\n");
+                .append("Order Quantity,Profit,Position Value,Currency,")
+                .append("Profit (Base),Position Value (Base),Base Currency,Has Stop Loss,Portfolio %\n");
 
         // Data rows
         for (PositionRisk risk : report.positionRisks()) {
@@ -94,13 +94,14 @@ public class ApiController {
                     .append(risk.currentPrice()).append(",")
                     .append(risk.stopPrice()).append(",")
                     .append(risk.orderQuantity()).append(",")
-                    .append(risk.potentialLoss()).append(",")
+                    .append(risk.profit()).append(",")
                     .append(risk.positionValue()).append(",")
                     .append(escapeCsv(risk.currency())).append(",")
-                    .append(risk.potentialLossBase()).append(",")
+                    .append(risk.profitBase()).append(",")
                     .append(risk.positionValueBase()).append(",")
                     .append(escapeCsv(risk.baseCurrency())).append(",")
-                    .append(risk.hasStopLoss()).append("\n");
+                    .append(risk.hasStopLoss()).append(",")
+                    .append(risk.portfolioPercentage()).append("\n");
         }
 
         return Response.ok(csv.toString())
