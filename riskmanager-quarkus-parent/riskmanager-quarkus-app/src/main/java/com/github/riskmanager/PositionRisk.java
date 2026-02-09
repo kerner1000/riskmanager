@@ -1,5 +1,7 @@
 package com.github.riskmanager;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.math.BigDecimal;
 
 /**
@@ -91,4 +93,22 @@ public record PositionRisk(
         boolean hasStopLoss,
         BigDecimal portfolioPercentage
 ) {
+    /**
+     * Returns whether the position is currently in profit.
+     * For long positions: in profit when currentPrice > avgPrice.
+     * For short positions: in profit when currentPrice < avgPrice.
+     *
+     * @return true if in profit, false if not or if prices are unavailable
+     */
+    @JsonProperty
+    public boolean inProfit() {
+        if (currentPrice == null || avgPrice == null || positionSize == null) {
+            return false;
+        }
+        if (positionSize.compareTo(BigDecimal.ZERO) > 0) {
+            return currentPrice.compareTo(avgPrice) > 0;
+        } else {
+            return currentPrice.compareTo(avgPrice) < 0;
+        }
+    }
 }
