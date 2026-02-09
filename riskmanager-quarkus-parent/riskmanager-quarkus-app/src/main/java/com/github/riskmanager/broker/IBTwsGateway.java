@@ -330,8 +330,6 @@ public class IBTwsGateway implements BrokerGateway {
 
     // ==================== TWS Callback Handler ====================
 
-
-// ... existing code ...
     /**
      * Extends DefaultEWrapper to get default implementations for all callbacks,
      * then override only the ones we need.
