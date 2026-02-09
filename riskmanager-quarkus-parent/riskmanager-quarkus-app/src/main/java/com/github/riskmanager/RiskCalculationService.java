@@ -144,16 +144,16 @@ public class RiskCalculationService {
             String ticker,
             boolean hasStopLoss
     ) {
-        // Calculate profit per share (positive = profit locked in, negative = potential loss)
-        BigDecimal profitPerShare = calculateProfitPerShare(position.quantity(), position.avgPrice(), stopPrice);
-        BigDecimal profit = profitPerShare.multiply(quantity).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP);
+        // Calculate securedProfitAmount per share (positive = securedProfitAmount locked in, negative = potential loss)
+        BigDecimal securedProfitPrice = calculateSecuredProfitPrice(position.quantity(), position.avgPrice(), stopPrice);
+        BigDecimal securedProfitAmount = securedProfitPrice.multiply(quantity).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP);
         BigDecimal positionValue = position.quantity().abs().multiply(position.marketPrice()).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP);
         String currency = position.currency();
 
         if (hasStopLoss) {
-            accumulator.addProtectedProfit(profit, currency);
+            accumulator.addProtectedProfit(securedProfitAmount, currency);
         } else {
-            accumulator.addUnprotectedProfit(profit, currency);
+            accumulator.addUnprotectedProfit(securedProfitAmount, currency);
         }
 
         accumulator.addRisk(new PositionRisk(
@@ -164,10 +164,10 @@ public class RiskCalculationService {
                 position.marketPrice().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
                 stopPrice.setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
                 quantity.setScale(SIZE_SCALE, RoundingMode.HALF_UP),
-                profit,
+                securedProfitAmount,
                 positionValue,
                 currency,
-                currencyService.convertToBase(profit, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
+                currencyService.convertToBase(securedProfitAmount, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
                 currencyService.convertToBase(positionValue, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
                 currencyService.getBaseCurrency(),
                 hasStopLoss,
@@ -179,7 +179,7 @@ public class RiskCalculationService {
      * Calculate profit per share based on stop price vs average price.
      * Positive = profit locked in, Negative = potential loss exposure.
      */
-    private BigDecimal calculateProfitPerShare(BigDecimal positionSize, BigDecimal avgPrice, BigDecimal stopPrice) {
+    private BigDecimal calculateSecuredProfitPrice(BigDecimal positionSize, BigDecimal avgPrice, BigDecimal stopPrice) {
         if (positionSize.compareTo(BigDecimal.ZERO) > 0) {
             // Long position: profit = stopPrice - avgPrice
             return stopPrice.subtract(avgPrice);

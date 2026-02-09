@@ -44,10 +44,10 @@ class RiskAccumulator {
                         r.currentPrice(),
                         r.stopPrice(),
                         r.orderQuantity(),
-                        r.profit(),
+                        r.securedProfit(),
                         r.positionValue(),
                         r.currency(),
-                        r.profitBase(),
+                        r.securedProfitBase(),
                         r.positionValueBase(),
                         r.baseCurrency(),
                         r.hasStopLoss(),
@@ -57,7 +57,7 @@ class RiskAccumulator {
                                 .multiply(new BigDecimal("100"))
                                 : BigDecimal.ZERO
                 ))
-                .sorted(Comparator.comparing(PositionRisk::profit).reversed())
+                .sorted(Comparator.comparing(PositionRisk::securedProfit).reversed())
                 .toList();
 
         return new RiskReport(
