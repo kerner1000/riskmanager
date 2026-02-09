@@ -46,42 +46,45 @@ class RiskAccumulator {
 
         // Create new risks with portfolio percentage
         List<PositionRisk> risksWithPercentage = risks.stream()
-                .map(r -> new PositionRisk(
-                        r.accountId(),
-                        r.ticker(),
-                        r.positionSize(),
-                        r.avgPrice(),
-                        r.currentPrice(),
-                        r.stopPrice(),
-                        r.orderQuantity(),
-                        r.lockedProfit().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                        r.atRiskProfit().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                        r.positionValue().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                        r.currency(),
-                        r.lockedProfitBase().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                        r.atRiskProfitBase().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                        r.positionValueBase().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                        r.baseCurrency(),
-                        r.hasStopLoss(),
-                        totalPortfolioValue.compareTo(BigDecimal.ZERO) > 0
+                .map(r -> PositionRisk.builder()
+                        .accountId(r.accountId())
+                        .ticker(r.ticker())
+                        .positionSize(r.positionSize())
+                        .avgPrice(r.avgPrice())
+                        .currentPrice(r.currentPrice())
+                        .stopPrice(r.stopPrice())
+                        .orderQuantity(r.orderQuantity())
+                        .lockedProfit(r.lockedProfit().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                        .atRiskProfit(r.atRiskProfit().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                        .positionValue(r.positionValue().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                        .currency(r.currency())
+                        .lockedProfitBase(r.lockedProfitBase().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                        .atRiskProfitBase(r.atRiskProfitBase().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                        .positionValueBase(r.positionValueBase().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                        .baseCurrency(r.baseCurrency())
+                        .hasStopLoss(r.hasStopLoss())
+                        .portfolioPercentage(totalPortfolioValue.compareTo(BigDecimal.ZERO) > 0
                                 ? r.positionValueBase()
                                 .divide(totalPortfolioValue, 4, RoundingMode.HALF_UP)
                                 .multiply(new BigDecimal("100"))
                                 .setScale(CURRENCY_SCALE, RoundingMode.HALF_UP)
-                                : BigDecimal.ZERO
-                ))
-                .sorted(Comparator.comparing(PositionRisk::lockedProfit).reversed())
+                                : BigDecimal.ZERO)
+                        .build())
+                .sorted(Comparator.comparing(PositionRisk::lockedProfitBase))
                 .toList();
 
-        return new RiskReport(
-                worstCaseProfitWithStopLossBase.add(worstCaseProfitWithoutStopLossBase).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                worstCaseProfitWithStopLossBase.setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                worstCaseProfitWithoutStopLossBase.setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                totalAtRiskProfitBase,
-                totalPortfolioValue,
-                currencyService.getBaseCurrency(),
-                unprotectedLossPercentage,
-                risksWithPercentage
-        );
+        return RiskReport.builder()
+                .totalPositionValue(totalPortfolioValue)
+                .worstCaseProfit(worstCaseProfitWithStopLossBase.add(worstCaseProfitWithoutStopLossBase)
+                        .setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                .worstCaseProfitWithStopLoss(worstCaseProfitWithStopLossBase
+                        .setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                .worstCaseProfitWithoutStopLoss(worstCaseProfitWithoutStopLossBase
+                        .setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                .totalAtRiskProfit(totalAtRiskProfitBase)
+                .currency(currencyService.getBaseCurrency())
+                .unprotectedLossPercentageUsed(unprotectedLossPercentage)
+                .positionRisks(risksWithPercentage)
+                .build();
     }
 }

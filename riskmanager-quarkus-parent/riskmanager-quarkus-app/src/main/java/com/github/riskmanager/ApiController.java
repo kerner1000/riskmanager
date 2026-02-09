@@ -68,16 +68,16 @@ public class ApiController {
                     .map(PositionRisk::positionValueBase)
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            return new RiskReport(
-                    report.worstCaseProfitWithoutStopLoss(),
-                    BigDecimal.ZERO,
-                    report.worstCaseProfitWithoutStopLoss(),
-                    filteredAtRiskProfit,
-                    filteredPositionValue,
-                    report.currency(),
-                    report.unprotectedLossPercentageUsed(),
-                    filtered
-            );
+            return RiskReport.builder()
+                    .totalPositionValue(filteredPositionValue)
+                    .worstCaseProfit(report.worstCaseProfitWithoutStopLoss())
+                    .worstCaseProfitWithStopLoss(BigDecimal.ZERO)
+                    .worstCaseProfitWithoutStopLoss(report.worstCaseProfitWithoutStopLoss())
+                    .totalAtRiskProfit(filteredAtRiskProfit)
+                    .currency(report.currency())
+                    .unprotectedLossPercentageUsed(report.unprotectedLossPercentageUsed())
+                    .positionRisks(filtered)
+                    .build();
         }
         return report;
     }

@@ -213,7 +213,7 @@ public class IBTwsGateway implements BrokerGateway {
             BigDecimal marketPrice = BigDecimal.ZERO;
             try {
                 marketPrice = priceFutures.get(pos.conid()).get(5, TimeUnit.SECONDS);
-                Log.infof(">>> Got price for %s: %s", pos.ticker(), marketPrice);
+                Log.debugf(">>> Got price for %s: %s", pos.ticker(), marketPrice);
             } catch (TimeoutException e) {
                 Log.warnf(">>> Timeout getting price for %s (conid=%d)", pos.ticker(), pos.conid());
             } catch (Exception e) {
@@ -424,7 +424,7 @@ public class IBTwsGateway implements BrokerGateway {
                         // Prioritize close/last, but accept high/low/bid/ask as fallback
                         if (field == 4 || field == 9 || field == 68 || field == 75 ||
                                 field == 72 || field == 73 || field == 66 || field == 67) {
-                            Log.infof(">>> Completing price future: conid=%d, price=%f (field=%d)", conid, price, field);
+                            Log.debugf(">>> Completing price future: conid=%d, price=%f (field=%d)", Integer.valueOf(conid), Double.valueOf(price), Integer.valueOf(field));
                             future.complete(BigDecimal.valueOf(price));
                         }
                     }

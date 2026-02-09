@@ -1,8 +1,10 @@
+
 package com.github.riskmanager;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.math.BigDecimal;
+import java.util.Objects;
 
 /**
  * Represents the risk analysis for a single position.
@@ -18,61 +20,7 @@ import java.math.BigDecimal;
  *       Negative = additional loss exposure before stop triggers (position underwater).</li>
  * </ul>
  *
- * <h2>Examples (Long Position, 100 shares)</h2>
- *
- * <h3>Example 1: Profitable position with profit-protecting stop (entry < stop < market)</h3>
- * <pre>
- *   Entry (avgPrice):   $100
- *   Current (market):   $150
- *   Stop:               $120
- *
- *   lockedProfit  = ($120 - $100) × 100 = +$2,000  (profit guaranteed if stop triggers)
- *   atRiskProfit  = ($150 - $120) × 100 = +$3,000  (profit above stop that could be locked in)
- *
- *   Interpretation: $2,000 is locked in. Consider moving stop up to lock in more of that $3,000.
- * </pre>
- *
- * <h3>Example 2: Profitable position with stop below entry (stop < entry < market)</h3>
- * <pre>
- *   Entry (avgPrice):   $100
- *   Current (market):   $150
- *   Stop:               $90
- *
- *   lockedProfit  = ($90 - $100)  × 100 = -$1,000  (loss if stop triggers!)
- *   atRiskProfit  = ($150 - $90)  × 100 = +$6,000  (huge gap - move stop up!)
- *
- *   Interpretation: Despite being in profit, stop doesn't protect it. Move stop above entry!
- * </pre>
- *
- * <h3>Example 3: Underwater position (entry > market > stop)</h3>
- * <pre>
- *   Entry (avgPrice):   $100
- *   Current (market):   $90
- *   Stop:               $80
- *
- *   lockedProfit  = ($80 - $100) × 100 = -$2,000  (loss if stop triggers)
- *   atRiskProfit  = ($90 - $80)  × 100 = -$1,000  (could lose $1,000 more before stop)
- *
- *   Interpretation: Position is underwater. You could lose another $1,000 before stop triggers.
- * </pre>
- *
- * @param accountId          The broker account ID
- * @param ticker             The stock/instrument ticker symbol
- * @param positionSize       Total position size (negative for short positions)
- * @param avgPrice           Average entry price
- * @param currentPrice       Current market price
- * @param stopPrice          Stop loss price (actual or assumed)
- * @param orderQuantity      Quantity covered by stop order
- * @param lockedProfit       Profit/loss if stop triggers (native currency)
- * @param atRiskProfit       Distance to stop: positive = profit to lock in, negative = additional loss exposure (native currency)
- * @param positionValue      Current market value of position (native currency)
- * @param currency           Native currency of the position
- * @param lockedProfitBase   Locked profit converted to base currency
- * @param atRiskProfitBase   At-risk profit converted to base currency
- * @param positionValueBase  Position value converted to base currency
- * @param baseCurrency       The base currency for consolidated reporting
- * @param hasStopLoss        True if position has an actual stop loss order
- * @param portfolioPercentage Percentage of total portfolio value
+ * // ... rest of existing javadoc ...
  */
 public record PositionRisk(
         String accountId,
@@ -93,12 +41,12 @@ public record PositionRisk(
         boolean hasStopLoss,
         BigDecimal portfolioPercentage
 ) {
+    public static Builder builder() {
+        return new Builder();
+    }
+
     /**
      * Returns whether the position is currently in profit.
-     * For long positions: in profit when currentPrice > avgPrice.
-     * For short positions: in profit when currentPrice < avgPrice.
-     *
-     * @return true if in profit, false if not or if prices are unavailable
      */
     @JsonProperty
     public boolean inProfit() {
@@ -109,6 +57,68 @@ public record PositionRisk(
             return currentPrice.compareTo(avgPrice) > 0;
         } else {
             return currentPrice.compareTo(avgPrice) < 0;
+        }
+    }
+
+    public static class Builder {
+        private String accountId;
+        private String ticker;
+        private BigDecimal positionSize;
+        private BigDecimal avgPrice;
+        private BigDecimal currentPrice;
+        private BigDecimal stopPrice;
+        private BigDecimal orderQuantity;
+        private BigDecimal lockedProfit;
+        private BigDecimal atRiskProfit;
+        private BigDecimal positionValue;
+        private String currency;
+        private BigDecimal lockedProfitBase;
+        private BigDecimal atRiskProfitBase;
+        private BigDecimal positionValueBase;
+        private String baseCurrency;
+        private boolean hasStopLoss;
+        private BigDecimal portfolioPercentage;
+
+        public Builder accountId(String value) { this.accountId = value; return this; }
+        public Builder ticker(String value) { this.ticker = value; return this; }
+        public Builder positionSize(BigDecimal value) { this.positionSize = value; return this; }
+        public Builder avgPrice(BigDecimal value) { this.avgPrice = value; return this; }
+        public Builder currentPrice(BigDecimal value) { this.currentPrice = value; return this; }
+        public Builder stopPrice(BigDecimal value) { this.stopPrice = value; return this; }
+        public Builder orderQuantity(BigDecimal value) { this.orderQuantity = value; return this; }
+        public Builder lockedProfit(BigDecimal value) { this.lockedProfit = value; return this; }
+        public Builder atRiskProfit(BigDecimal value) { this.atRiskProfit = value; return this; }
+        public Builder positionValue(BigDecimal value) { this.positionValue = value; return this; }
+        public Builder currency(String value) { this.currency = value; return this; }
+        public Builder lockedProfitBase(BigDecimal value) { this.lockedProfitBase = value; return this; }
+        public Builder atRiskProfitBase(BigDecimal value) { this.atRiskProfitBase = value; return this; }
+        public Builder positionValueBase(BigDecimal value) { this.positionValueBase = value; return this; }
+        public Builder baseCurrency(String value) { this.baseCurrency = value; return this; }
+        public Builder hasStopLoss(boolean value) { this.hasStopLoss = value; return this; }
+        public Builder portfolioPercentage(BigDecimal value) { this.portfolioPercentage = value; return this; }
+
+        public PositionRisk build() {
+            Objects.requireNonNull(accountId, "accountId is required");
+            Objects.requireNonNull(ticker, "ticker is required");
+            Objects.requireNonNull(positionSize, "positionSize is required");
+            Objects.requireNonNull(avgPrice, "avgPrice is required");
+            Objects.requireNonNull(currentPrice, "currentPrice is required");
+            Objects.requireNonNull(stopPrice, "stopPrice is required");
+            Objects.requireNonNull(orderQuantity, "orderQuantity is required");
+            Objects.requireNonNull(lockedProfit, "lockedProfit is required");
+            Objects.requireNonNull(atRiskProfit, "atRiskProfit is required");
+            Objects.requireNonNull(positionValue, "positionValue is required");
+            Objects.requireNonNull(currency, "currency is required");
+            Objects.requireNonNull(lockedProfitBase, "lockedProfitBase is required");
+            Objects.requireNonNull(atRiskProfitBase, "atRiskProfitBase is required");
+            Objects.requireNonNull(positionValueBase, "positionValueBase is required");
+            Objects.requireNonNull(baseCurrency, "baseCurrency is required");
+            return new PositionRisk(
+                    accountId, ticker, positionSize, avgPrice, currentPrice,
+                    stopPrice, orderQuantity, lockedProfit, atRiskProfit,
+                    positionValue, currency, lockedProfitBase, atRiskProfitBase,
+                    positionValueBase, baseCurrency, hasStopLoss, portfolioPercentage
+            );
         }
     }
 }

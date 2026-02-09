@@ -176,25 +176,25 @@ public class RiskCalculationService {
             accumulator.addProfitWithoutStopLoss(lockedProfitAmount, currency);
         }
 
-        accumulator.addRisk(new PositionRisk(
-                position.accountId(),
-                ticker,
-                position.quantity().setScale(SIZE_SCALE, RoundingMode.HALF_UP),
-                position.avgPrice().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                position.marketPrice().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                stopPrice.setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                quantity.setScale(SIZE_SCALE, RoundingMode.HALF_UP),
-                lockedProfitAmount,
-                atRiskProfitAmount,
-                positionValue,
-                currency,
-                currencyService.convertToBase(lockedProfitAmount, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                currencyService.convertToBase(atRiskProfitAmount, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                currencyService.convertToBase(positionValue, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
-                currencyService.getBaseCurrency(),
-                hasStopLoss,
-                null  // portfolioPercentage calculated in RiskAccumulator.toReport()
-        ));
+        accumulator.addRisk(PositionRisk.builder()
+                .accountId(position.accountId())
+                .ticker(ticker)
+                .positionSize(position.quantity().setScale(SIZE_SCALE, RoundingMode.HALF_UP))
+                .avgPrice(position.avgPrice().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                .currentPrice(position.marketPrice().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                .stopPrice(stopPrice.setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                .orderQuantity(quantity.setScale(SIZE_SCALE, RoundingMode.HALF_UP))
+                .lockedProfit(lockedProfitAmount)
+                .atRiskProfit(atRiskProfitAmount)
+                .positionValue(positionValue)
+                .currency(currency)
+                .lockedProfitBase(currencyService.convertToBase(lockedProfitAmount, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                .atRiskProfitBase(currencyService.convertToBase(atRiskProfitAmount, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                .positionValueBase(currencyService.convertToBase(positionValue, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP))
+                .baseCurrency(currencyService.getBaseCurrency())
+                .hasStopLoss(hasStopLoss)
+                .portfolioPercentage(null)  // calculated in RiskAccumulator.toReport()
+                .build());
     }
 
     /**
