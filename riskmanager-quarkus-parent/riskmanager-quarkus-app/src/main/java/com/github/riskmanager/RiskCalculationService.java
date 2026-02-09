@@ -24,7 +24,7 @@ public class RiskCalculationService {
     public static final String ORDER_SIDE_BUY = "BUY";
     public static final String TIME_IN_FORCE_GTC = "GTC";
 
-    private static final int CURRENCY_SCALE = 4;
+    private static final int CURRENCY_SCALE = 2;
     private static final int SIZE_SCALE = 4;
 
     @Inject
@@ -136,6 +136,21 @@ public class RiskCalculationService {
         }
     }
 
+    /**
+     * Calculate unsecured profit per share based on current price vs stop price.
+     * This is the profit between current price and stop loss that hasn't been locked in yet.
+     * Positive = additional unrealized profit, Negative = position is underwater vs stop.
+     */
+    private BigDecimal calculateUnsecuredProfitPrice(BigDecimal positionSize, BigDecimal currentPrice, BigDecimal stopPrice) {
+        if (positionSize.compareTo(BigDecimal.ZERO) > 0) {
+            // Long position: unsecured profit = currentPrice - stopPrice
+            return currentPrice.subtract(stopPrice);
+        } else {
+            // Short position: unsecured profit = stopPrice - currentPrice
+            return stopPrice.subtract(currentPrice);
+        }
+    }
+
     private void addPositionRisk(
             RiskAccumulator accumulator,
             Position position,
@@ -144,16 +159,21 @@ public class RiskCalculationService {
             String ticker,
             boolean hasStopLoss
     ) {
-        // Calculate securedProfitAmount per share (positive = securedProfitAmount locked in, negative = potential loss)
-        BigDecimal securedProfitPrice = calculateSecuredProfitPrice(position.quantity(), position.avgPrice(), stopPrice);
-        BigDecimal securedProfitAmount = securedProfitPrice.multiply(quantity).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP);
+        // Calculate lockedProfit (profit/loss if stop triggers)
+        BigDecimal lockedProfitPrice = calculateLockedProfitPrice(position.quantity(), position.avgPrice(), stopPrice);
+        BigDecimal lockedProfitAmount = lockedProfitPrice.multiply(quantity).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP);
+
+        // Calculate atRiskProfit (profit to lock in or additional loss exposure)
+        BigDecimal atRiskProfitPrice = calculateAtRiskProfitPrice(position.quantity(), position.avgPrice(), position.marketPrice(), stopPrice);
+        BigDecimal atRiskProfitAmount = atRiskProfitPrice.multiply(quantity).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP);
+
         BigDecimal positionValue = position.quantity().abs().multiply(position.marketPrice()).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP);
         String currency = position.currency();
 
         if (hasStopLoss) {
-            accumulator.addProtectedProfit(securedProfitAmount, currency);
+            accumulator.addProfitWithStopLoss(lockedProfitAmount, currency);
         } else {
-            accumulator.addUnprotectedProfit(securedProfitAmount, currency);
+            accumulator.addProfitWithoutStopLoss(lockedProfitAmount, currency);
         }
 
         accumulator.addRisk(new PositionRisk(
@@ -164,15 +184,66 @@ public class RiskCalculationService {
                 position.marketPrice().setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
                 stopPrice.setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
                 quantity.setScale(SIZE_SCALE, RoundingMode.HALF_UP),
-                securedProfitAmount,
+                lockedProfitAmount,
+                atRiskProfitAmount,
                 positionValue,
                 currency,
-                currencyService.convertToBase(securedProfitAmount, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
+                currencyService.convertToBase(lockedProfitAmount, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
+                currencyService.convertToBase(atRiskProfitAmount, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
                 currencyService.convertToBase(positionValue, currency).setScale(CURRENCY_SCALE, RoundingMode.HALF_UP),
                 currencyService.getBaseCurrency(),
                 hasStopLoss,
                 null  // portfolioPercentage calculated in RiskAccumulator.toReport()
         ));
+    }
+
+    /**
+     * Calculate locked profit per share based on stop price vs average price.
+     * Positive = profit locked in, Negative = loss locked in.
+     */
+    private BigDecimal calculateLockedProfitPrice(BigDecimal positionSize, BigDecimal avgPrice, BigDecimal stopPrice) {
+        if (positionSize.compareTo(BigDecimal.ZERO) > 0) {
+            // Long position: profit = stopPrice - avgPrice
+            return stopPrice.subtract(avgPrice);
+        } else {
+            // Short position: profit = avgPrice - stopPrice
+            return avgPrice.subtract(stopPrice);
+        }
+    }
+
+    /**
+     * Calculate at-risk profit per share based on current price vs stop price.
+     * <p>
+     * When position is in profit (currentPrice > avgPrice for longs):
+     *   Returns {@code currentPrice - stopPrice} (positive = profit that could be locked in).
+     * <p>
+     * When position is underwater (currentPrice <= avgPrice for longs):
+     *   Returns {@code -(currentPrice - stopPrice)} (negative = additional loss before stop triggers).
+     * <p>
+     * This makes the sign intuitive: positive = good (profit to capture), negative = bad (more loss exposure).
+     */
+    private BigDecimal calculateAtRiskProfitPrice(BigDecimal positionSize, BigDecimal avgPrice, BigDecimal currentPrice, BigDecimal stopPrice) {
+        if (positionSize.compareTo(BigDecimal.ZERO) > 0) {
+            // Long position
+            BigDecimal distanceToStop = currentPrice.subtract(stopPrice);
+            if (currentPrice.compareTo(avgPrice) > 0) {
+                // In profit: positive = profit that could be locked in
+                return distanceToStop;
+            } else {
+                // Underwater: negate to show as negative (additional loss exposure)
+                return distanceToStop.negate();
+            }
+        } else {
+            // Short position
+            BigDecimal distanceToStop = stopPrice.subtract(currentPrice);
+            if (currentPrice.compareTo(avgPrice) < 0) {
+                // In profit: positive = profit that could be locked in
+                return distanceToStop;
+            } else {
+                // Underwater: negate to show as negative (additional loss exposure)
+                return distanceToStop.negate();
+            }
+        }
     }
 
     /**

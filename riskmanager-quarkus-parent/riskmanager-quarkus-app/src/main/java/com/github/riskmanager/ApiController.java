@@ -59,10 +59,21 @@ public class ApiController {
             List<PositionRisk> filtered = report.positionRisks().stream()
                     .filter(r -> !r.hasStopLoss())
                     .toList();
+
+            BigDecimal filteredAtRiskProfit = filtered.stream()
+                    .map(PositionRisk::atRiskProfitBase)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            BigDecimal filteredPositionValue = filtered.stream()
+                    .map(PositionRisk::positionValueBase)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
             return new RiskReport(
-                    report.unprotectedProfit(),
+                    report.worstCaseProfitWithoutStopLoss(),
                     BigDecimal.ZERO,
-                    report.unprotectedProfit(),
+                    report.worstCaseProfitWithoutStopLoss(),
+                    filteredAtRiskProfit,
+                    filteredPositionValue,
                     report.currency(),
                     report.unprotectedLossPercentageUsed(),
                     filtered
@@ -82,8 +93,8 @@ public class ApiController {
         StringBuilder csv = new StringBuilder();
         // Header row
         csv.append("Account ID,Ticker,Position Size,Avg Price,Current Price,Stop Price,")
-                .append("Order Quantity,Secured Profit,Position Value,Currency,")
-                .append("Secured Profit (Base),Position Value (Base),Base Currency,Has Stop Loss,Portfolio %\n");
+                .append("Order Quantity,Locked Profit,At-Risk Profit,Position Value,Currency,")
+                .append("Locked Profit (Base),At-Risk Profit (Base),Position Value (Base),Base Currency,Has Stop Loss,Portfolio %\n");
 
         // Data rows
         for (PositionRisk risk : report.positionRisks()) {
@@ -94,15 +105,25 @@ public class ApiController {
                     .append(risk.currentPrice()).append(",")
                     .append(risk.stopPrice()).append(",")
                     .append(risk.orderQuantity()).append(",")
-                    .append(risk.securedProfit()).append(",")
+                    .append(risk.lockedProfit()).append(",")
+                    .append(risk.atRiskProfit()).append(",")
                     .append(risk.positionValue()).append(",")
                     .append(escapeCsv(risk.currency())).append(",")
-                    .append(risk.securedProfitBase()).append(",")
+                    .append(risk.lockedProfitBase()).append(",")
+                    .append(risk.atRiskProfitBase()).append(",")
                     .append(risk.positionValueBase()).append(",")
                     .append(escapeCsv(risk.baseCurrency())).append(",")
                     .append(risk.hasStopLoss()).append(",")
                     .append(risk.portfolioPercentage()).append("\n");
         }
+
+        // Summary row
+//        csv.append(",TOTAL,,,,,,,,,")
+//                .append(escapeCsv(report.currency())).append(",")
+//                .append(report.worstCaseProfit()).append(",")
+//                .append(report.totalAtRiskProfit()).append(",")
+//                .append(report.totalPositionValue()).append(",")
+//                .append(escapeCsv(report.currency())).append(",,100\n");
 
         return Response.ok(csv.toString())
                 .type("text/csv; charset=UTF-8")
