@@ -94,7 +94,7 @@ public class ApiController {
         // Header row
         csv.append("Account ID,Ticker,Position Size,Avg Price,Current Price,Stop Price,")
                 .append("Order Quantity,Locked Profit,At-Risk Profit,Position Value,Currency,")
-                .append("Locked Profit (Base),At-Risk Profit (Base),Position Value (Base),Base Currency,Has Stop Loss,In Profit, Portfolio %\n");
+                .append("Position Value (Base),Locked Profit (Base),At-Risk Profit (Base),Base Currency,Has Stop Loss,In Profit, Portfolio %\n");
 
         // Data rows
         for (PositionRisk risk : report.positionRisks()) {
@@ -109,9 +109,9 @@ public class ApiController {
                     .append(risk.atRiskProfit()).append(",")
                     .append(risk.positionValue()).append(",")
                     .append(escapeCsv(risk.currency())).append(",")
+                    .append(risk.positionValueBase()).append(",")
                     .append(risk.lockedProfitBase()).append(",")
                     .append(risk.atRiskProfitBase()).append(",")
-                    .append(risk.positionValueBase()).append(",")
                     .append(escapeCsv(risk.baseCurrency())).append(",")
                     .append(risk.hasStopLoss()).append(",")
                     .append(risk.inProfit()).append(",")
