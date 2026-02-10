@@ -136,21 +136,6 @@ public class RiskCalculationService {
         }
     }
 
-    /**
-     * Calculate unsecured profit per share based on current price vs stop price.
-     * This is the profit between current price and stop loss that hasn't been locked in yet.
-     * Positive = additional unrealized profit, Negative = position is underwater vs stop.
-     */
-    private BigDecimal calculateUnsecuredProfitPrice(BigDecimal positionSize, BigDecimal currentPrice, BigDecimal stopPrice) {
-        if (positionSize.compareTo(BigDecimal.ZERO) > 0) {
-            // Long position: unsecured profit = currentPrice - stopPrice
-            return currentPrice.subtract(stopPrice);
-        } else {
-            // Short position: unsecured profit = stopPrice - currentPrice
-            return stopPrice.subtract(currentPrice);
-        }
-    }
-
     private void addPositionRisk(
             RiskAccumulator accumulator,
             Position position,
@@ -214,36 +199,27 @@ public class RiskCalculationService {
     /**
      * Calculate at-risk profit per share based on current price vs stop price.
      * <p>
-     * When position is in profit (currentPrice > avgPrice for longs):
-     *   Returns {@code currentPrice - stopPrice} (positive = profit that could be locked in).
+     * When stop is in the green (stopPrice > avgPrice for longs):
+     *   Returns positive value = profit between market and stop that could still be captured.
      * <p>
-     * When position is underwater (currentPrice <= avgPrice for longs):
-     *   Returns {@code -(currentPrice - stopPrice)} (negative = additional loss before stop triggers).
-     * <p>
-     * This makes the sign intuitive: positive = good (profit to capture), negative = bad (more loss exposure).
+     * When stop is in the red (stopPrice < avgPrice for longs):
+     *   Returns negative value = potential loss exposure between market and stop.
      */
     private BigDecimal calculateAtRiskProfitPrice(BigDecimal positionSize, BigDecimal avgPrice, BigDecimal currentPrice, BigDecimal stopPrice) {
+        BigDecimal distanceToStop;
+        boolean stopInGreen;
+
         if (positionSize.compareTo(BigDecimal.ZERO) > 0) {
             // Long position
-            BigDecimal distanceToStop = currentPrice.subtract(stopPrice);
-            if (currentPrice.compareTo(avgPrice) > 0) {
-                // In profit: positive = profit that could be locked in
-                return distanceToStop;
-            } else {
-                // Underwater: negate to show as negative (additional loss exposure)
-                return distanceToStop.negate();
-            }
+            distanceToStop = currentPrice.subtract(stopPrice);
+            stopInGreen = stopPrice.compareTo(avgPrice) > 0;
         } else {
             // Short position
-            BigDecimal distanceToStop = stopPrice.subtract(currentPrice);
-            if (currentPrice.compareTo(avgPrice) < 0) {
-                // In profit: positive = profit that could be locked in
-                return distanceToStop;
-            } else {
-                // Underwater: negate to show as negative (additional loss exposure)
-                return distanceToStop.negate();
-            }
+            distanceToStop = stopPrice.subtract(currentPrice);
+            stopInGreen = stopPrice.compareTo(avgPrice) < 0;
         }
+
+        return stopInGreen ? distanceToStop : distanceToStop.negate();
     }
 
     /**
